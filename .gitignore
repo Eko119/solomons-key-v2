@@ -1,0 +1,13 @@
+.env
+node_modules/
+dist/
+store/solomons-key.db
+store/*.db
+*.db-shm
+*.db-wal
+__pycache__/
+*.pyc
+warroom/venv/
+outputs/meet_briefs/**/*.md
+/tmp/warroom-pin.json
+assets/icon.ico

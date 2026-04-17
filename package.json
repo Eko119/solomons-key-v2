@@ -1,0 +1,38 @@
+{
+  "name": "solomons-key",
+  "version": "1.0.0",
+  "description": "Solomon's Key — Personal AI Operating System",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts",
+    "schedule": "npx tsx src/schedule-cli.ts",
+    "mission": "npx tsx src/mission-cli.ts",
+    "meet": "npx tsx src/meet-cli.ts",
+    "agent:create": "npx tsx src/agent-create.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-code": "latest",
+    "@google/genai": "latest",
+    "better-sqlite3": "^9.4.3",
+    "node-telegram-bot-api": "^0.66.0",
+    "dotenv": "^16.4.5",
+    "hono": "^4.3.7",
+    "@hono/node-server": "^1.12.0",
+    "js-yaml": "^4.1.0",
+    "cron-parser": "^4.9.0",
+    "uuid": "^10.0.0",
+    "node-cron": "^3.0.3"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.10",
+    "@types/node": "^20.14.0",
+    "@types/node-telegram-bot-api": "^0.64.7",
+    "@types/js-yaml": "^4.0.9",
+    "@types/uuid": "^10.0.0",
+    "typescript": "^5.4.5",
+    "tsx": "^4.11.0",
+    "ts-node": "^10.9.2"
+  }
+}
