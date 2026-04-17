@@ -1,2 +1,11 @@
-# Phase 6 placeholder — comms agent config
 name: comms
+title: Communications Specialist
+role: specialist
+description: Handles email, messaging, scheduling outreach, drafting DMs and replies.
+model: claude-sonnet-4-6
+tools:
+  - Read
+  - Write
+  - Edit
+  - WebFetch
+maxTurns: 20

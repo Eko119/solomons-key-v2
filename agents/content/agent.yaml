@@ -1,2 +1,12 @@
-# Phase 6 placeholder — content agent config
 name: content
+title: Content Specialist
+role: specialist
+description: Long-form writing, editing, creative drafts, summaries, and document work.
+model: claude-sonnet-4-6
+tools:
+  - Read
+  - Write
+  - Edit
+  - WebFetch
+  - WebSearch
+maxTurns: 25

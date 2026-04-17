@@ -1,2 +1,12 @@
-# Phase 6 placeholder — research agent config
 name: research
+title: Research Specialist
+role: specialist
+description: Investigation, web lookups, comparative analysis, fact checks, synthesis.
+model: claude-sonnet-4-6
+tools:
+  - Read
+  - Grep
+  - Glob
+  - WebFetch
+  - WebSearch
+maxTurns: 30

@@ -1,2 +1,12 @@
-# Phase 6 placeholder — main agent config
 name: main
+title: Main Orchestrator
+role: orchestrator
+description: Classifies incoming messages, routes to specialists, or answers directly for simple queries.
+model: claude-opus-4-6
+tools:
+  - Read
+  - Grep
+  - Glob
+  - WebFetch
+  - WebSearch
+maxTurns: 30
