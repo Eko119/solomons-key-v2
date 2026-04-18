@@ -1,0 +1,26 @@
+[Unit]
+Description=Solomon's Key — main orchestrator
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=solomon
+WorkingDirectory=/home/solomon/solomons-key
+EnvironmentFile=/home/solomon/solomons-key/.env
+ExecStart=/usr/bin/node /home/solomon/solomons-key/dist/index.js
+Restart=always
+RestartSec=5
+StandardOutput=append:/home/solomon/solomons-key/logs/main.log
+StandardError=append:/home/solomon/solomons-key/logs/main.err
+KillSignal=SIGTERM
+TimeoutStopSec=15
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=false
+
+[Install]
+WantedBy=multi-user.target

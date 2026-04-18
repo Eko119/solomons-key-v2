@@ -1,0 +1,22 @@
+[Unit]
+Description=Solomon's Key — War Room voice server
+After=network-online.target solomons-key-main.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=solomon
+WorkingDirectory=/home/solomon/solomons-key/warroom
+EnvironmentFile=/home/solomon/solomons-key/.env
+Environment=WARROOM_MODE=legacy
+ExecStart=/home/solomon/solomons-key/warroom/venv/bin/python3 /home/solomon/solomons-key/warroom/server.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:/home/solomon/solomons-key/logs/warroom.log
+StandardError=append:/home/solomon/solomons-key/logs/warroom.err
+
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
