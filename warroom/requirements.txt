@@ -1,1 +1,17 @@
-# Phase 9 placeholder
+# Solomon's Key — War Room voice server deps
+# Install via: python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt
+
+websockets>=12.0
+python-dotenv>=1.0.0
+
+# Voice providers (only imported when the matching key is present)
+cartesia>=1.0.0
+deepgram-sdk>=3.0.0
+elevenlabs>=1.0.0
+
+# Pipecat is heavy — uncomment when running full (non-legacy) mode
+# pipecat-ai[cartesia,deepgram,silero]>=0.0.40
+
+# Claude (optional — used for voice-triggered agent calls from Python side)
+anthropic>=0.30.0
+google-genai>=0.4.0

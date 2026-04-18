@@ -15,24 +15,25 @@
   "dependencies": {
     "@anthropic-ai/claude-code": "latest",
     "@google/genai": "latest",
+    "@hono/node-server": "^1.12.0",
     "better-sqlite3": "^9.4.3",
-    "node-telegram-bot-api": "^0.66.0",
+    "cron-parser": "^4.9.0",
     "dotenv": "^16.4.5",
     "hono": "^4.3.7",
-    "@hono/node-server": "^1.12.0",
     "js-yaml": "^4.1.0",
-    "cron-parser": "^4.9.0",
-    "uuid": "^10.0.0",
-    "node-cron": "^3.0.3"
+    "node-cron": "^3.0.3",
+    "node-telegram-bot-api": "^0.66.0",
+    "uuid": "^10.0.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.10",
+    "@types/js-yaml": "^4.0.9",
     "@types/node": "^20.14.0",
     "@types/node-telegram-bot-api": "^0.64.7",
-    "@types/js-yaml": "^4.0.9",
     "@types/uuid": "^10.0.0",
-    "typescript": "^5.4.5",
+    "@types/ws": "^8.18.1",
+    "ts-node": "^10.9.2",
     "tsx": "^4.11.0",
-    "ts-node": "^10.9.2"
+    "typescript": "^5.4.5"
   }
 }
