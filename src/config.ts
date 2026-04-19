@@ -34,7 +34,7 @@ export const config = {
 
   mainModel: process.env.MAIN_MODEL || 'claude-opus-4-6',
   agentModel: process.env.AGENT_MODEL || 'claude-sonnet-4-6',
-  geminiExtractModel: process.env.GEMINI_EXTRACT_MODEL || 'gemini-2.5-flash-preview',
+  geminiExtractModel: process.env.GEMINI_EXTRACT_MODEL || 'gemini-2.5-flash',
   geminiEmbedModel: process.env.GEMINI_EMBED_MODEL || 'gemini-embedding-001',
 
   agentMaxTurns: parseInt(process.env.AGENT_MAX_TURNS || '30', 10),

@@ -69,7 +69,7 @@ silently via WSL and open the dashboard.
 ## Models
 
 Main = `claude-opus-4-6`. Specialists = `claude-sonnet-4-6`.
-Memory = `gemini-embedding-001` + `gemini-2.5-flash-preview` for
+Memory = `gemini-embedding-001` + `gemini-2.5-flash` for
 extraction/consolidation.
 
 ## Override from spec
