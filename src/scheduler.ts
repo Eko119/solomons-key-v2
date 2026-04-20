@@ -4,6 +4,7 @@ import {
   getEnabledScheduledTasks, updateScheduledTaskRun, insertScheduledTask,
   getQueuedMissions, updateMissionStatus, getStuckMissions, incrementMissionRetry,
   insertAuditLog, ScheduledTask, MissionTask,
+  hasCompletedExecution, startExecution, completeExecution, failExecution,
 } from './db';
 import { dispatch } from './orchestrator';
 import { config } from './config';
@@ -48,12 +49,25 @@ export function scheduleTask(opts: {
 
 async function runScheduledTask(task: any): Promise<void> {
   const now = Date.now();
+  const idempotencyKey = `${task.id}:${new Date(now).toISOString().slice(0, 10)}`;
+
+  if (hasCompletedExecution(idempotencyKey)) {
+    console.debug(`[scheduler] skip ${task.name} (${String(task.id).slice(0, 8)}) — already completed for ${idempotencyKey}`);
+    const next = computeNextRun(task.cron_expr, new Date(now));
+    updateScheduledTaskRun(task.id, now, next);
+    return;
+  }
+
+  const execId = startExecution(task.id, idempotencyKey);
   try {
     const chatId = config.allowedChatIds[0] ?? 0;
     const outcome = await dispatch({ chatId, text: task.prompt });
     insertAuditLog(chatId, task.agent_id, 'scheduled_task_ran', `${task.name} → ${String(outcome.response || '').slice(0, 80)}`);
+    completeExecution(execId);
   } catch (err: any) {
-    insertAuditLog(null, task.agent_id, 'scheduled_task_failed', `${task.name}: ${err?.message || err}`.slice(0, 200));
+    const msg = err?.message || String(err);
+    failExecution(execId, msg);
+    insertAuditLog(null, task.agent_id, 'scheduled_task_failed', `${task.name}: ${msg}`.slice(0, 200));
   } finally {
     const next = computeNextRun(task.cron_expr, new Date(now));
     updateScheduledTaskRun(task.id, now, next);

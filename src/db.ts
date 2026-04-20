@@ -302,6 +302,37 @@ export function listScheduledTasks(): any[] {
   return db.prepare('SELECT * FROM scheduled_tasks ORDER BY created_at DESC').all() as any[];
 }
 
+// ---------- Execution Log (scheduler) ----------
+export function hasCompletedExecution(idempotencyKey: string): boolean {
+  return !!db.prepare(
+    "SELECT 1 FROM execution_log WHERE idempotency_key=? AND status='completed'"
+  ).get(idempotencyKey);
+}
+
+export function startExecution(jobId: string, idempotencyKey: string): number {
+  const row = db.prepare(`
+    INSERT INTO execution_log (job_id, idempotency_key, started_at, status)
+    VALUES (?, ?, ?, 'running')
+    ON CONFLICT(idempotency_key) DO UPDATE SET
+      started_at   = excluded.started_at,
+      status       = 'running',
+      completed_at = NULL,
+      error        = NULL
+    RETURNING id
+  `).get(jobId, idempotencyKey, Date.now()) as { id: number };
+  return row.id;
+}
+
+export function completeExecution(id: number): void {
+  db.prepare("UPDATE execution_log SET status='completed', completed_at=? WHERE id=?")
+    .run(Date.now(), id);
+}
+
+export function failExecution(id: number, errorMsg: string): void {
+  db.prepare("UPDATE execution_log SET status='failed', completed_at=?, error=? WHERE id=?")
+    .run(Date.now(), errorMsg, id);
+}
+
 // ---------- Mission Tasks ----------
 export function insertMissionTask(t: MissionTask): void {
   db.prepare('INSERT INTO mission_tasks (id, title, prompt, agent_id, priority, status, result, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
