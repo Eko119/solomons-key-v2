@@ -39,6 +39,7 @@ export const config = {
 
   agentMaxTurns: parseInt(process.env.AGENT_MAX_TURNS || '30', 10),
   agentTimeoutMs: parseInt(process.env.AGENT_TIMEOUT_MS || '900000', 10),
+  contextBudgetTokens: parseInt(process.env.CONTEXT_BUDGET_TOKENS || '150000', 10),
   costFooterMode: (process.env.COST_FOOTER_MODE || 'compact') as 'compact' | 'verbose' | 'cost' | 'full' | 'off',
 
   projectRoot: process.env.PROJECT_ROOT || process.cwd(),

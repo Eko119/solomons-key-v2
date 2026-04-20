@@ -39,6 +39,66 @@ const MAX_RESTART_ATTEMPTS = 3;
 const STAGGER_MS = 3_000;
 const MAX_CONCURRENT = 5;
 
+// ---------- AGENT-3: per-session token accounting + checkpoint hand-off ----------
+// A session is uniquely identified by (chatId, agentId). Tokens accumulate
+// across that session's turns; once the running total crosses 80% of the
+// request's contextBudget, the caller runs a checkpoint and stashes the
+// resulting summary here. The next turn consumes the summary, prepends it to
+// its payload, and starts a fresh claude invocation — effectively the
+// "spawn a new process" behavior from the v2 spec.
+interface TokenAccount {
+  total:          number;
+  pendingSummary: string | null;
+}
+
+const tokenAccounts = new Map<string, TokenAccount>();
+
+function accountKey(chatId: number, agentId: string): string {
+  return `${chatId}:${agentId}`;
+}
+
+function getOrCreateAccount(chatId: number, agentId: string): TokenAccount {
+  const k = accountKey(chatId, agentId);
+  let acc = tokenAccounts.get(k);
+  if (!acc) {
+    acc = { total: 0, pendingSummary: null };
+    tokenAccounts.set(k, acc);
+  }
+  return acc;
+}
+
+export function noteAgentTokens(chatId: number, agentId: string, tokens: number): number {
+  const acc = getOrCreateAccount(chatId, agentId);
+  acc.total += Math.max(0, tokens);
+  return acc.total;
+}
+
+export function getAgentTokenTotal(chatId: number, agentId: string): number {
+  return tokenAccounts.get(accountKey(chatId, agentId))?.total ?? 0;
+}
+
+export function shouldCheckpoint(chatId: number, agentId: string, budget: number): boolean {
+  if (budget <= 0) return false;
+  return getAgentTokenTotal(chatId, agentId) > 0.8 * budget;
+}
+
+export function setPendingCheckpointSummary(chatId: number, agentId: string, summary: string): void {
+  getOrCreateAccount(chatId, agentId).pendingSummary = summary;
+}
+
+export function takePendingCheckpointSummary(chatId: number, agentId: string): string | null {
+  const acc = tokenAccounts.get(accountKey(chatId, agentId));
+  if (!acc) return null;
+  const s = acc.pendingSummary;
+  acc.pendingSummary = null;
+  return s;
+}
+
+export function resetTokenAccount(chatId: number, agentId: string): void {
+  const acc = tokenAccounts.get(accountKey(chatId, agentId));
+  if (acc) acc.total = 0;
+}
+
 const agentHealth = new Map<string, AgentHealth>();
 for (const id of AGENT_IDS) {
   agentHealth.set(id, {

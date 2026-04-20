@@ -7,7 +7,8 @@ import {
 } from './agent-config';
 
 const DEFAULT_TIMEOUT_MS = 120_000;
-const DEFAULT_CONTEXT_BUDGET = 150_000;
+
+export const CHECKPOINT_PROMPT = 'Summarize your progress so far in under 500 words, then stop.';
 
 export interface RunAgentOptions {
   agentId:       string;
@@ -33,12 +34,32 @@ export interface AgentRunResult {
   timedOut:      boolean;
 }
 
-export function createTaskRequest(payload: string, contextBudget = DEFAULT_CONTEXT_BUDGET): AgentRequest {
+export function createTaskRequest(payload: string, contextBudget = config.contextBudgetTokens): AgentRequest {
   return {
     id:            uuidv4(),
     type:          'task',
     payload,
     contextBudget,
+    timestamp:     Date.now(),
+  };
+}
+
+export function createCheckpointRequest(contextBudget = config.contextBudgetTokens): AgentRequest {
+  return {
+    id:            uuidv4(),
+    type:          'checkpoint',
+    payload:       CHECKPOINT_PROMPT,
+    contextBudget,
+    timestamp:     Date.now(),
+  };
+}
+
+export function createShutdownRequest(): AgentRequest {
+  return {
+    id:            uuidv4(),
+    type:          'shutdown',
+    payload:       '',
+    contextBudget: 0,
     timestamp:     Date.now(),
   };
 }

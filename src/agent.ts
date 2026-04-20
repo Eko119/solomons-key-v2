@@ -1,11 +1,16 @@
 import { v4 as uuidv4 } from 'uuid';
 import { config } from './config';
 import { saveConversationTurn, recordHiveActivity, recordTokenUsage } from './db';
-import { runAgentEnvelope, createTaskRequest, RunAgentOptions } from './agent-create';
+import {
+  runAgentEnvelope, createTaskRequest, createCheckpointRequest, createShutdownRequest,
+  RunAgentOptions,
+} from './agent-create';
 import { AgentResponse } from './agent-config';
 import {
   markAgentBusy, markAgentIdle, markAgentFaulted,
   setAgentPid, getAgentHealth,
+  noteAgentTokens, shouldCheckpoint, getAgentTokenTotal,
+  setPendingCheckpointSummary, takePendingCheckpointSummary, resetTokenAccount,
 } from './agent-pool';
 
 export interface QueryOptions {
@@ -38,7 +43,19 @@ export async function runAgent(opts: QueryOptions): Promise<AgentResult> {
 
   markAgentBusy(opts.agentId, opts.prompt);
 
-  const req = createTaskRequest(opts.prompt);
+  // AGENT-3: if a prior turn crossed the budget, it left a summary here.
+  // Prepend it and start a fresh claude session so the new invocation begins
+  // with the summary as its only context.
+  const pending = takePendingCheckpointSummary(opts.chatId, opts.agentId);
+  const effectivePrompt = pending
+    ? `[Previous session summary — resume from this point]\n${pending}\n\n[Current task]\n${opts.prompt}`
+    : opts.prompt;
+  const effectiveSessionId = pending ? undefined : opts.sessionId;
+  if (pending) {
+    console.info(`[agent:${opts.agentId}] resumed from checkpoint summary (${pending.length} chars)`);
+  }
+
+  const req = createTaskRequest(effectivePrompt);
 
   const runOpts: RunAgentOptions = {
     agentId:      opts.agentId,
@@ -46,7 +63,7 @@ export async function runAgent(opts: QueryOptions): Promise<AgentResult> {
     systemPrompt: opts.systemPrompt,
     allowedTools: opts.allowedTools,
     cwd:          opts.cwd,
-    sessionId:    opts.sessionId,
+    sessionId:    effectiveSessionId,
     timeoutMs:    config.agentTimeoutMs,
     onEnvelope:   opts.onEnvelope,
     onStart:      (pid) => setAgentPid(opts.agentId, pid),
@@ -67,6 +84,17 @@ export async function runAgent(opts: QueryOptions): Promise<AgentResult> {
 
   markAgentIdle(opts.agentId);
 
+  // AGENT-3: accumulate tokens and, if over 80% of budget, run checkpoint
+  // + shutdown envelopes inline. The summary is stashed for the next turn
+  // via setPendingCheckpointSummary; the current turn still returns its
+  // own response unchanged.
+  const budget = req.contextBudget;
+  const total = noteAgentTokens(opts.chatId, opts.agentId, run.inputTokens + run.outputTokens);
+  if (shouldCheckpoint(opts.chatId, opts.agentId, budget)) {
+    console.info(`[agent:${opts.agentId}] context budget 80% threshold crossed (${total}/${budget}) — checkpointing`);
+    await runCheckpoint(opts.agentId, opts.chatId, run.sessionId, runOpts);
+  }
+
   const sessionId = run.sessionId || opts.sessionId || uuidv4();
 
   saveConversationTurn(opts.chatId, opts.agentId, 'user', opts.prompt, 0);
@@ -86,6 +114,39 @@ export async function runAgent(opts: QueryOptions): Promise<AgentResult> {
     costUsd:      run.costUsd,
     model:        run.model,
   };
+}
+
+async function runCheckpoint(
+  agentId: string,
+  chatId: number,
+  priorSessionId: string | null,
+  baseOpts: RunAgentOptions,
+): Promise<void> {
+  try {
+    const ckReq = createCheckpointRequest();
+    const ckRun = await runAgentEnvelope(ckReq, {
+      ...baseOpts,
+      sessionId:  priorSessionId ?? undefined,
+      onEnvelope: undefined,
+    });
+
+    if (ckRun.isError || !ckRun.finalResponse) {
+      console.warn(`[agent:${agentId}] checkpoint produced no summary — next turn starts cold`);
+      recordHiveActivity(agentId, 'checkpoint', '(no summary)');
+    } else {
+      setPendingCheckpointSummary(chatId, agentId, ckRun.finalResponse);
+      recordHiveActivity(agentId, 'checkpoint', ckRun.finalResponse.slice(0, 120));
+      console.info(`[agent:${agentId}] checkpoint summary stashed (${ckRun.finalResponse.length} chars, total tokens ${getAgentTokenTotal(chatId, agentId)})`);
+    }
+
+    const shutdownReq = createShutdownRequest();
+    await runAgentEnvelope(shutdownReq, { ...baseOpts, onEnvelope: undefined });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[agent:${agentId}] checkpoint error: ${msg}`);
+  } finally {
+    resetTokenAccount(chatId, agentId);
+  }
 }
 
 export function formatCostFooter(result: AgentResult, mode: string): string {
