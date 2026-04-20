@@ -9,6 +9,7 @@ import {
 } from './db';
 import { listAgents } from './agent-config';
 import { listAgentHealth } from './agent-pool';
+import { isWarroomAvailable } from './agent-voice-bridge';
 
 export function buildApp(): Hono {
   const app = new Hono();
@@ -31,7 +32,8 @@ export function buildApp(): Hono {
       id: a.id, title: a.title, model: a.model, tools: a.tools, role: a.role,
     }));
     const sessions = rawDb().prepare('SELECT chat_id, agent_id, last_activity, locked FROM sessions ORDER BY last_activity DESC LIMIT 20').all();
-    return c.json({ agents, sessions });
+    const warroom: 'up' | 'down' = isWarroomAvailable() ? 'up' : 'down';
+    return c.json({ agents, sessions, warroom });
   });
 
   app.get('/api/agents', c => {
