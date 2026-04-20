@@ -3,7 +3,7 @@ import { runSubprocessPool, PoolTask } from './agent-pool';
 import { getAgent, listSpecialists, isValidAgentId, AgentResponse } from './agent-config';
 import { retrieveContext, formatContext } from './memory';
 import { ingestConversation } from './memory-ingest';
-import { scanForSecrets } from './exfiltration-guard';
+import { sanitizeOutput } from './exfiltration-guard';
 import { insertAuditLog } from './db';
 
 function logEnvelope(agentId: string, env: AgentResponse): void {
@@ -23,7 +23,6 @@ export interface DispatchOutcome {
   response: string;
   result?: AgentResult;
   fanOut?: { id: string; output: string }[];
-  blocked?: { reason: string };
 }
 
 export function extractMentions(text: string): string[] {
@@ -79,20 +78,14 @@ async function runSingle(agentId: string, opts: DispatchOptions): Promise<Dispat
     onEnvelope: (env) => logEnvelope(agentId, env),
   });
 
-  const scan = scanForSecrets(result.response);
-  if (scan.found) {
-    insertAuditLog(opts.chatId, agentId, 'exfil_blocked', scan.matches.join(','));
-    return {
-      agentId,
-      response: '[blocked — agent output contained potential secrets]',
-      result,
-      blocked: { reason: scan.matches.join(',') },
-    };
+  const sanitized = sanitizeOutput(result.response);
+  if (sanitized !== result.response) {
+    insertAuditLog(opts.chatId, agentId, 'exfil_redacted', `delta=${result.response.length - sanitized.length}`);
   }
 
-  ingestConversation(opts.chatId, agentId, opts.text, result.response);
-  console.info(`[orch:${agentId}] payload ${result.response.slice(0, 200)}`);
-  return { agentId, response: result.response, result };
+  ingestConversation(opts.chatId, agentId, opts.text, sanitized);
+  console.info(`[orch:${agentId}] payload ${sanitized.slice(0, 200)}`);
+  return { agentId, response: sanitized, result };
 }
 
 async function runFanOut(agentIds: string[], opts: DispatchOptions): Promise<DispatchOutcome> {
@@ -111,20 +104,15 @@ async function runFanOut(agentIds: string[], opts: DispatchOptions): Promise<Dis
   }
 
   const results = await runSubprocessPool(tasks);
-  const fanOut = results.map(r => ({ id: r.id, output: r.output }));
+  const fanOut = results.map(r => {
+    const sanitized = sanitizeOutput(r.output);
+    if (sanitized !== r.output) {
+      insertAuditLog(opts.chatId, r.id, 'exfil_redacted', `delta=${r.output.length - sanitized.length}`);
+    }
+    return { id: r.id, output: sanitized };
+  });
 
   const combined = fanOut.map(r => `## @${r.id}\n${r.output}`).join('\n\n');
-  const scan = scanForSecrets(combined);
-  if (scan.found) {
-    insertAuditLog(opts.chatId, 'fan-out', 'exfil_blocked', scan.matches.join(','));
-    return {
-      agentId: 'fan-out',
-      response: '[blocked — fan-out output contained potential secrets]',
-      fanOut,
-      blocked: { reason: scan.matches.join(',') },
-    };
-  }
-
   for (const r of fanOut) ingestConversation(opts.chatId, r.id, opts.text, r.output);
   for (const r of fanOut) console.info(`[orch:${r.id}] payload ${r.output.slice(0, 200)}`);
   return { agentId: 'fan-out', response: combined, fanOut };

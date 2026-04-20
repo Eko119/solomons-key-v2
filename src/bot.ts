@@ -118,7 +118,7 @@ async function handleMessage(bot: TelegramBot, chatId: number, text: string): Pr
 
     const outcome = await dispatch({ chatId, text });
     let response = outcome.response || '[no response]';
-    if (!outcome.blocked && outcome.result) {
+    if (outcome.result) {
       response += formatCostFooter(outcome.result, config.costFooterMode);
     }
     await send(bot, chatId, response);

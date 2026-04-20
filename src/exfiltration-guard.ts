@@ -17,6 +17,7 @@ const PATTERNS: Pattern[] = [
   { name: 'url_with_creds',      re: /https?:\/\/[^:@\s]+:[^@\s]+@/g },
   { name: 'ip_port_combo',       re: /\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d{2,5}\b/g },
   { name: 'bearer_token',        re: /Bearer\s+[A-Za-z0-9\-_\.]{20,}/gi },
+  { name: 'system_path',         re: /\/(?:etc|root|proc|sys|boot|dev)(?:\/[\w.\-]+)+/g },
 ];
 
 export function scanForSecrets(text: string): { found: boolean; matches: string[] } {
@@ -51,4 +52,22 @@ export function scanForSecrets(text: string): { found: boolean; matches: string[
 
   const unique = Array.from(new Set(hits));
   return { found: unique.length > 0, matches: unique };
+}
+
+// SEC-2: redact any of the leak patterns above with a fixed token.
+// Returned text is safe to persist or forward; matched content is never
+// included in the warn log (we log only the pattern name).
+const REDACTION = '[REDACTED]';
+
+export function sanitizeOutput(text: string): string {
+  let out = text;
+  for (const { name, re } of PATTERNS) {
+    re.lastIndex = 0;
+    if (!re.test(out)) continue;
+    re.lastIndex = 0;
+    const before = out;
+    out = out.replace(re, REDACTION);
+    if (out !== before) console.warn(`[exfil-guard] redacted pattern=${name}`);
+  }
+  return out;
 }
