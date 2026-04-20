@@ -3,6 +3,10 @@ import { config } from './config';
 import { saveConversationTurn, recordHiveActivity, recordTokenUsage } from './db';
 import { runAgentEnvelope, createTaskRequest, RunAgentOptions } from './agent-create';
 import { AgentResponse } from './agent-config';
+import {
+  markAgentBusy, markAgentIdle, markAgentFaulted,
+  setAgentPid, getAgentHealth,
+} from './agent-pool';
 
 export interface QueryOptions {
   agentId:       string;
@@ -27,6 +31,13 @@ export interface AgentResult {
 }
 
 export async function runAgent(opts: QueryOptions): Promise<AgentResult> {
+  const health = getAgentHealth(opts.agentId);
+  if (health && health.state === 'faulted') {
+    throw new Error(`runAgent: agent ${opts.agentId} is faulted — skipping dispatch`);
+  }
+
+  markAgentBusy(opts.agentId, opts.prompt);
+
   const req = createTaskRequest(opts.prompt);
 
   const runOpts: RunAgentOptions = {
@@ -38,17 +49,23 @@ export async function runAgent(opts: QueryOptions): Promise<AgentResult> {
     sessionId:    opts.sessionId,
     timeoutMs:    config.agentTimeoutMs,
     onEnvelope:   opts.onEnvelope,
+    onStart:      (pid) => setAgentPid(opts.agentId, pid),
   };
 
   const run = await runAgentEnvelope(req, runOpts);
 
   if (run.timedOut) {
+    markAgentFaulted(opts.agentId, 'timeout');
     throw new Error(`runAgent: timed out after ${config.agentTimeoutMs}ms`);
   }
   if (run.isError && !run.finalResponse) {
     const errEnv = run.envelopes.find(e => e.type === 'error');
-    throw new Error(`runAgent: ${errEnv?.payload || 'unknown error'}`);
+    const reason = errEnv?.payload || 'unknown error';
+    markAgentFaulted(opts.agentId, reason);
+    throw new Error(`runAgent: ${reason}`);
   }
+
+  markAgentIdle(opts.agentId);
 
   const sessionId = run.sessionId || opts.sessionId || uuidv4();
 

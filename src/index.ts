@@ -3,6 +3,7 @@ import { startBot } from './bot';
 import { startScheduler, stopScheduler } from './scheduler';
 import { startDashboard } from './dashboard';
 import { listAgents } from './agent-config';
+import { setAlertHandler } from './agent-pool';
 import { startConsolidationLoop, stopConsolidationLoop } from './memory-consolidate';
 import { voiceProviderStatus } from './voice';
 
@@ -12,6 +13,14 @@ async function main(): Promise<void> {
   const agents = listAgents();
   const dash = startDashboard();
   const bot = startBot();
+  const alertChatId = config.allowedChatIds[0];
+  if (alertChatId) {
+    setAlertHandler((msg) => {
+      bot.sendMessage(alertChatId, msg).catch(err => {
+        console.error(`[boot] telegram alert failed: ${err?.message || err}`);
+      });
+    });
+  }
   startScheduler();
   for (const a of agents) startConsolidationLoop(a.id);
 

@@ -8,6 +8,7 @@ import {
   getMemoriesByAgent,
 } from './db';
 import { listAgents } from './agent-config';
+import { listAgentHealth } from './agent-pool';
 
 export function buildApp(): Hono {
   const app = new Hono();
@@ -31,6 +32,25 @@ export function buildApp(): Hono {
     }));
     const sessions = rawDb().prepare('SELECT chat_id, agent_id, last_activity, locked FROM sessions ORDER BY last_activity DESC LIMIT 20').all();
     return c.json({ agents, sessions });
+  });
+
+  app.get('/api/agents', c => {
+    const defs = new Map(listAgents().map(a => [a.id, a]));
+    const rows = listAgentHealth().map(h => {
+      const def = defs.get(h.agentId);
+      return {
+        id:              h.agentId,
+        title:           def?.title ?? h.agentId,
+        model:           def?.model ?? null,
+        state:           h.state,
+        lastTask:        h.lastTask,
+        lastError:       h.lastError,
+        restartAttempts: h.restartAttempts,
+        lastTransition:  h.lastTransition,
+        pid:             h.pid,
+      };
+    });
+    return c.json({ agents: rows });
   });
 
   app.get('/api/missions', c => {

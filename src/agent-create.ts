@@ -18,6 +18,7 @@ export interface RunAgentOptions {
   sessionId?:    string;
   timeoutMs?:    number;
   onEnvelope?:   (env: AgentResponse) => void;
+  onStart?:      (pid: number | null) => void;
 }
 
 export interface AgentRunResult {
@@ -121,6 +122,7 @@ export async function runAgentEnvelope(req: AgentRequest, opts: RunAgentOptions)
       cwd: opts.cwd || config.projectRoot,
       env: { ...process.env, ANTHROPIC_API_KEY: config.anthropicApiKey },
     });
+    opts.onStart?.(child.pid ?? null);
 
     let buffer = '';
     let stderrBuf = '';

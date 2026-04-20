@@ -1,5 +1,5 @@
 import { runAgentEnvelope, createTaskRequest } from './agent-create';
-import { AgentResponse } from './agent-config';
+import { AgentResponse, AGENT_IDS } from './agent-config';
 
 export interface PoolTask {
   id:            string;
@@ -20,8 +20,108 @@ export interface PoolResult {
   timedOut:    boolean;
 }
 
+// ---------- Agent Health State Machine (AGENT-2) ----------
+
+export type AgentState = 'idle' | 'busy' | 'faulted' | 'restarting';
+
+export interface AgentHealth {
+  agentId:         string;
+  state:           AgentState;
+  lastTask:        string | null;
+  lastError:       string | null;
+  restartAttempts: number;
+  lastTransition:  number;
+  pid:             number | null;
+}
+
+const RESTART_DELAY_MS = 5_000;
+const MAX_RESTART_ATTEMPTS = 3;
 const STAGGER_MS = 3_000;
 const MAX_CONCURRENT = 5;
+
+const agentHealth = new Map<string, AgentHealth>();
+for (const id of AGENT_IDS) {
+  agentHealth.set(id, {
+    agentId:         id,
+    state:           'idle',
+    lastTask:        null,
+    lastError:       null,
+    restartAttempts: 0,
+    lastTransition:  Date.now(),
+    pid:             null,
+  });
+}
+
+type AlertFn = (message: string) => void;
+let alertFn: AlertFn | null = null;
+
+export function setAlertHandler(fn: AlertFn | null): void {
+  alertFn = fn;
+}
+
+export function listAgentHealth(): AgentHealth[] {
+  return Array.from(agentHealth.values()).map(h => ({ ...h }));
+}
+
+export function getAgentHealth(agentId: string): AgentHealth | null {
+  const h = agentHealth.get(agentId);
+  return h ? { ...h } : null;
+}
+
+export function markAgentBusy(agentId: string, task: string): void {
+  const h = agentHealth.get(agentId);
+  if (!h) return;
+  h.state = 'busy';
+  h.lastTask = task.slice(0, 200);
+  h.lastTransition = Date.now();
+}
+
+export function setAgentPid(agentId: string, pid: number | null): void {
+  const h = agentHealth.get(agentId);
+  if (!h) return;
+  h.pid = pid;
+}
+
+export function markAgentIdle(agentId: string): void {
+  const h = agentHealth.get(agentId);
+  if (!h) return;
+  h.state = 'idle';
+  h.lastError = null;
+  h.pid = null;
+  h.restartAttempts = 0;
+  h.lastTransition = Date.now();
+}
+
+export function markAgentFaulted(agentId: string, error: string): void {
+  const h = agentHealth.get(agentId);
+  if (!h) return;
+  h.state = 'faulted';
+  h.lastError = error.slice(0, 400);
+  h.pid = null;
+  h.lastTransition = Date.now();
+
+  if (h.restartAttempts >= MAX_RESTART_ATTEMPTS) {
+    const msg = `Agent @${agentId} exhausted ${MAX_RESTART_ATTEMPTS} restart attempts. Stays faulted.\nLast error: ${h.lastError}`;
+    console.warn(`[agent-pool] ${msg}`);
+    try { alertFn?.(`⚠️ ${msg}`); } catch { /* noop */ }
+    return;
+  }
+
+  setTimeout(() => {
+    const cur = agentHealth.get(agentId);
+    if (!cur || cur.state !== 'faulted') return;
+    cur.state = 'restarting';
+    cur.restartAttempts += 1;
+    cur.lastTransition = Date.now();
+    console.log(`[agent-pool] restart ${agentId} (attempt ${cur.restartAttempts}/${MAX_RESTART_ATTEMPTS})`);
+    setTimeout(() => {
+      const c = agentHealth.get(agentId);
+      if (!c || c.state !== 'restarting') return;
+      c.state = 'idle';
+      c.lastTransition = Date.now();
+    }, 50);
+  }, RESTART_DELAY_MS);
+}
 
 export async function runSubprocessPool(tasks: PoolTask[]): Promise<PoolResult[]> {
   if (tasks.length > MAX_CONCURRENT) {
@@ -34,6 +134,21 @@ function runOne(task: PoolTask, startDelay: number): Promise<PoolResult> {
   return new Promise(resolve => {
     setTimeout(async () => {
       const start = Date.now();
+
+      const h = agentHealth.get(task.id);
+      if (h && h.state === 'faulted') {
+        resolve({
+          id:           task.id,
+          output:       `[skipped — agent ${task.id} is faulted]`,
+          exitCode:     -1,
+          durationMs:   0,
+          sentinelSeen: false,
+          timedOut:     false,
+        });
+        return;
+      }
+
+      markAgentBusy(task.id, task.prompt);
       const req = createTaskRequest(task.prompt);
 
       const run = await runAgentEnvelope(req, {
@@ -43,9 +158,18 @@ function runOne(task: PoolTask, startDelay: number): Promise<PoolResult> {
         allowedTools: task.allowedTools,
         cwd:          task.cwd,
         onEnvelope:   task.onEnvelope,
+        onStart:      (pid) => setAgentPid(task.id, pid),
       });
 
       const doneEnv = run.envelopes.find(e => e.type === 'done');
+      const errorEnv = run.envelopes.find(e => e.type === 'error');
+
+      if (run.isError || run.timedOut) {
+        const reason = run.timedOut ? 'timeout' : (errorEnv?.payload || 'unknown error');
+        markAgentFaulted(task.id, reason);
+      } else {
+        markAgentIdle(task.id);
+      }
 
       resolve({
         id:           task.id,
