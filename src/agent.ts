@@ -1,111 +1,74 @@
-import { spawn } from 'child_process';
 import { v4 as uuidv4 } from 'uuid';
 import { config } from './config';
 import { saveConversationTurn, recordHiveActivity, recordTokenUsage } from './db';
+import { runAgentEnvelope, createTaskRequest, RunAgentOptions } from './agent-create';
+import { AgentResponse } from './agent-config';
 
 export interface QueryOptions {
-  agentId: string;
-  chatId: number;
-  prompt: string;
+  agentId:       string;
+  chatId:        number;
+  prompt:        string;
   systemPrompt?: string;
-  cwd?: string;
+  cwd?:          string;
   allowedTools?: string[];
-  model?: string;
-  sessionId?: string;
-  maxTurns?: number;
+  model?:        string;
+  sessionId?:    string;
+  maxTurns?:     number;
+  onEnvelope?:   (env: AgentResponse) => void;
 }
 
 export interface AgentResult {
-  response: string;
-  sessionId: string;
-  inputTokens: number;
+  response:     string;
+  sessionId:    string;
+  inputTokens:  number;
   outputTokens: number;
-  costUsd: number;
-  model: string;
-}
-
-interface ClaudeCliResult {
-  result: string;
-  session_id: string;
-  total_cost_usd?: number;
-  is_error?: boolean;
-  usage?: { input_tokens?: number; output_tokens?: number };
-  stop_reason?: string;
-}
-
-function extractResultJson(stdout: string): ClaudeCliResult | null {
-  for (const line of stdout.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed.startsWith('{')) continue;
-    try {
-      const obj = JSON.parse(trimmed);
-      if (obj && typeof obj === 'object' && obj.type === 'result') return obj;
-    } catch { /* skip */ }
-  }
-  return null;
+  costUsd:      number;
+  model:        string;
 }
 
 export async function runAgent(opts: QueryOptions): Promise<AgentResult> {
-  const model = opts.model || (opts.agentId === 'main' ? config.mainModel : config.agentModel);
-  const args = [
-    '--print',
-    '--output-format', 'json',
-    '--dangerously-skip-permissions',
-    '--model', model,
-  ];
-  if (opts.sessionId) args.push('--resume', opts.sessionId);
-  if (opts.systemPrompt) args.push('--append-system-prompt', opts.systemPrompt);
-  if (opts.allowedTools?.length) args.push('--allowed-tools', opts.allowedTools.join(','));
-  args.push('-p', opts.prompt);
+  const req = createTaskRequest(opts.prompt);
 
-  const child = spawn('claude', args, {
-    cwd: opts.cwd || config.projectRoot,
-    env: { ...process.env, ANTHROPIC_API_KEY: config.anthropicApiKey },
-  });
+  const runOpts: RunAgentOptions = {
+    agentId:      opts.agentId,
+    model:        opts.model,
+    systemPrompt: opts.systemPrompt,
+    allowedTools: opts.allowedTools,
+    cwd:          opts.cwd,
+    sessionId:    opts.sessionId,
+    timeoutMs:    config.agentTimeoutMs,
+    onEnvelope:   opts.onEnvelope,
+  };
 
-  let stdout = '';
-  let stderr = '';
-  child.stdout.on('data', (d: Buffer) => { stdout += d.toString(); });
-  child.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
+  const run = await runAgentEnvelope(req, runOpts);
 
-  const timeoutMs = config.agentTimeoutMs;
-  const timeout = setTimeout(() => { try { child.kill('SIGTERM'); } catch { /* noop */ } }, timeoutMs);
-
-  const exitCode: number | null = await new Promise(resolve => {
-    child.on('close', code => resolve(code));
-  });
-  clearTimeout(timeout);
-
-  const parsed = extractResultJson(stdout);
-  if (!parsed) {
-    throw new Error(`runAgent: claude CLI did not return parseable JSON. exit=${exitCode} stderr=${stderr.slice(0, 500)}`);
+  if (run.timedOut) {
+    throw new Error(`runAgent: timed out after ${config.agentTimeoutMs}ms`);
+  }
+  if (run.isError && !run.finalResponse) {
+    const errEnv = run.envelopes.find(e => e.type === 'error');
+    throw new Error(`runAgent: ${errEnv?.payload || 'unknown error'}`);
   }
 
-  const inputTokens = parsed.usage?.input_tokens || 0;
-  const outputTokens = parsed.usage?.output_tokens || 0;
-  const finalResponse = parsed.result || '';
-  const usedSessionId = parsed.session_id || opts.sessionId || uuidv4();
-
-  const isOpus = model.includes('opus');
-  const inputRate = isOpus ? 15 : 3;
-  const outputRate = isOpus ? 75 : 15;
-  const computedCost = ((inputTokens * inputRate) + (outputTokens * outputRate)) / 1_000_000;
-  const costUsd = parsed.total_cost_usd ?? computedCost;
+  const sessionId = run.sessionId || opts.sessionId || uuidv4();
 
   saveConversationTurn(opts.chatId, opts.agentId, 'user', opts.prompt, 0);
-  saveConversationTurn(opts.chatId, opts.agentId, 'assistant', finalResponse, outputTokens);
+  saveConversationTurn(opts.chatId, opts.agentId, 'assistant', run.finalResponse, run.outputTokens);
   recordTokenUsage({
     id: uuidv4(), agent_id: opts.agentId, chat_id: opts.chatId,
-    input_tokens: inputTokens, output_tokens: outputTokens, cost_usd: costUsd,
-    model, timestamp: Date.now(),
+    input_tokens: run.inputTokens, output_tokens: run.outputTokens,
+    cost_usd: run.costUsd, model: run.model, timestamp: Date.now(),
   });
   recordHiveActivity(opts.agentId, 'query', opts.prompt.slice(0, 120));
 
-  if (parsed.is_error) {
-    throw new Error(`runAgent: CLI reported error — ${finalResponse}`);
-  }
-
-  return { response: finalResponse, sessionId: usedSessionId, inputTokens, outputTokens, costUsd, model };
+  return {
+    response:     run.finalResponse,
+    sessionId,
+    inputTokens:  run.inputTokens,
+    outputTokens: run.outputTokens,
+    costUsd:      run.costUsd,
+    model:        run.model,
+  };
 }
 
 export function formatCostFooter(result: AgentResult, mode: string): string {

@@ -1,10 +1,14 @@
 import { runAgent, AgentResult, classifyMessage } from './agent';
 import { runSubprocessPool, PoolTask } from './agent-pool';
-import { getAgent, listSpecialists, isValidAgentId } from './agent-config';
+import { getAgent, listSpecialists, isValidAgentId, AgentResponse } from './agent-config';
 import { retrieveContext, formatContext } from './memory';
 import { ingestConversation } from './memory-ingest';
 import { scanForSecrets } from './exfiltration-guard';
 import { insertAuditLog } from './db';
+
+function logEnvelope(agentId: string, env: AgentResponse): void {
+  console.debug(`[orch:${agentId}] envelope ${JSON.stringify(env)}`);
+}
 
 const MENTION_RE = /@(\w+)/g;
 
@@ -72,6 +76,7 @@ async function runSingle(agentId: string, opts: DispatchOptions): Promise<Dispat
     model: def.model,
     sessionId: opts.sessionId,
     maxTurns: def.maxTurns,
+    onEnvelope: (env) => logEnvelope(agentId, env),
   });
 
   const scan = scanForSecrets(result.response);
@@ -86,6 +91,7 @@ async function runSingle(agentId: string, opts: DispatchOptions): Promise<Dispat
   }
 
   ingestConversation(opts.chatId, agentId, opts.text, result.response);
+  console.info(`[orch:${agentId}] payload ${result.response.slice(0, 200)}`);
   return { agentId, response: result.response, result };
 }
 
@@ -100,6 +106,7 @@ async function runFanOut(agentIds: string[], opts: DispatchOptions): Promise<Dis
       model: def.model,
       systemAppend: systemPrompt,
       allowedTools: def.tools,
+      onEnvelope: (env) => logEnvelope(id, env),
     });
   }
 
@@ -119,6 +126,7 @@ async function runFanOut(agentIds: string[], opts: DispatchOptions): Promise<Dis
   }
 
   for (const r of fanOut) ingestConversation(opts.chatId, r.id, opts.text, r.output);
+  for (const r of fanOut) console.info(`[orch:${r.id}] payload ${r.output.slice(0, 200)}`);
   return { agentId: 'fan-out', response: combined, fanOut };
 }
 

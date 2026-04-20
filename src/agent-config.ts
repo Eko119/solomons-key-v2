@@ -1,7 +1,27 @@
 import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
+import { z } from 'zod';
 import { config } from './config';
+
+// ---------- Typed Agent I/O Protocol (AGENT-1) ----------
+export const AgentRequestSchema = z.object({
+  id:            z.string().min(1),
+  type:          z.enum(['task', 'checkpoint', 'shutdown']),
+  payload:       z.string(),
+  contextBudget: z.number().int().nonnegative(),
+  timestamp:     z.number().int(),
+});
+export type AgentRequest = z.infer<typeof AgentRequestSchema>;
+
+export const AgentResponseSchema = z.object({
+  id:         z.string().min(1),
+  type:       z.enum(['result', 'checkpoint', 'error', 'done']),
+  payload:    z.string(),
+  tokenCount: z.number().int().nonnegative().optional(),
+  timestamp:  z.number().int(),
+});
+export type AgentResponse = z.infer<typeof AgentResponseSchema>;
 
 export interface AgentDefinition {
   id: string;

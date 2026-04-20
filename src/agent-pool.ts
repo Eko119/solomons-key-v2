@@ -1,26 +1,25 @@
-import { spawn } from 'child_process';
-import { config } from './config';
+import { runAgentEnvelope, createTaskRequest } from './agent-create';
+import { AgentResponse } from './agent-config';
 
 export interface PoolTask {
-  id: string;
-  prompt: string;
-  model?: string;
-  cwd?: string;
+  id:            string;
+  prompt:        string;
+  model?:        string;
+  cwd?:          string;
   systemAppend?: string;
   allowedTools?: string[];
+  onEnvelope?:   (env: AgentResponse) => void;
 }
 
 export interface PoolResult {
-  id: string;
-  output: string;
-  exitCode: number | null;
-  durationMs: number;
+  id:          string;
+  output:      string;
+  exitCode:    number | null;
+  durationMs:  number;
   sentinelSeen: boolean;
-  timedOut: boolean;
+  timedOut:    boolean;
 }
 
-const SENTINEL = '[AGENT_DONE]';
-const TIMEOUT_MS = 120_000;
 const STAGGER_MS = 3_000;
 const MAX_CONCURRENT = 5;
 
@@ -33,66 +32,28 @@ export async function runSubprocessPool(tasks: PoolTask[]): Promise<PoolResult[]
 
 function runOne(task: PoolTask, startDelay: number): Promise<PoolResult> {
   return new Promise(resolve => {
-    setTimeout(() => {
+    setTimeout(async () => {
       const start = Date.now();
-      const append = (task.systemAppend ? task.systemAppend + '\n\n' : '') +
-        `When your work is complete, print exactly ${SENTINEL} on its own final line.`;
+      const req = createTaskRequest(task.prompt);
 
-      const args = [
-        '--print',
-        '--dangerously-skip-permissions',
-        '--model', task.model || config.agentModel,
-        '--append-system-prompt', append,
-      ];
-      if (task.allowedTools?.length) args.push('--allowed-tools', task.allowedTools.join(','));
-      args.push('-p', task.prompt);
-
-      const child = spawn('claude', args, {
-        cwd: task.cwd || config.projectRoot,
-        env: { ...process.env, ANTHROPIC_API_KEY: config.anthropicApiKey },
+      const run = await runAgentEnvelope(req, {
+        agentId:      task.id,
+        model:        task.model,
+        systemPrompt: task.systemAppend,
+        allowedTools: task.allowedTools,
+        cwd:          task.cwd,
+        onEnvelope:   task.onEnvelope,
       });
 
-      let output = '';
-      let sentinelSeen = false;
-      let timedOut = false;
+      const doneEnv = run.envelopes.find(e => e.type === 'done');
 
-      child.stdout.on('data', (d: Buffer) => {
-        output += d.toString();
-        if (!sentinelSeen && output.includes(SENTINEL)) {
-          sentinelSeen = true;
-          // Sentinel detected — give the child a brief grace window, then terminate if still running.
-          setTimeout(() => { try { child.kill('SIGTERM'); } catch { /* noop */ } }, 500);
-        }
-      });
-      child.stderr.on('data', (d: Buffer) => { output += d.toString(); });
-
-      const to = setTimeout(() => {
-        timedOut = true;
-        try { child.kill('SIGTERM'); } catch { /* noop */ }
-      }, TIMEOUT_MS);
-
-      child.on('close', (code) => {
-        clearTimeout(to);
-        resolve({
-          id: task.id,
-          output: output.replace(SENTINEL, '').trim(),
-          exitCode: code,
-          durationMs: Date.now() - start,
-          sentinelSeen,
-          timedOut,
-        });
-      });
-
-      child.on('error', (err) => {
-        clearTimeout(to);
-        resolve({
-          id: task.id,
-          output: `spawn error: ${err.message}`,
-          exitCode: -1,
-          durationMs: Date.now() - start,
-          sentinelSeen: false,
-          timedOut: false,
-        });
+      resolve({
+        id:           task.id,
+        output:       (run.finalResponse || doneEnv?.payload || '').trim(),
+        exitCode:     run.isError ? -1 : 0,
+        durationMs:   Date.now() - start,
+        sentinelSeen: !!doneEnv,
+        timedOut:     run.timedOut,
       });
     }, startDelay);
   });
