@@ -62,8 +62,21 @@ export interface Memory {
   superseded_by?: string | null;
   consolidated?: number;
   embedding?: string | null;
+  content_hash?: string | null;
   created_at: string;
   last_accessed?: string | null;
+}
+
+export interface MemoryRetryRow {
+  id: number;
+  chat_id: string;
+  agent_id: string;
+  content: string;
+  content_hash: string;
+  attempts: number;
+  last_error: string | null;
+  next_retry_at: number;
+  created_at: number;
 }
 
 export interface TokenUsage {
@@ -178,14 +191,18 @@ export function searchConversationHistory(keywords: string, agentId: string, day
 
 // ---------- Memories ----------
 export function insertMemory(mem: Memory): void {
-  db.prepare(`INSERT INTO memories (id, chat_id, agent_id, summary, raw_text, entities, topics, importance, salience, pinned, superseded_by, consolidated, embedding, created_at, last_accessed)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+  db.prepare(`INSERT INTO memories (id, chat_id, agent_id, summary, raw_text, entities, topics, importance, salience, pinned, superseded_by, consolidated, embedding, content_hash, created_at, last_accessed)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .run(
       mem.id, mem.chat_id, mem.agent_id, mem.summary, mem.raw_text ?? null,
       mem.entities ?? '[]', mem.topics ?? '[]', mem.importance, mem.salience,
       mem.pinned ?? 0, mem.superseded_by ?? null, mem.consolidated ?? 0,
-      mem.embedding ?? null, mem.created_at, mem.last_accessed ?? null
+      mem.embedding ?? null, mem.content_hash ?? null, mem.created_at, mem.last_accessed ?? null
     );
+}
+
+export function memoryExistsByHash(hash: string): boolean {
+  return !!db.prepare('SELECT 1 FROM memories WHERE content_hash=? LIMIT 1').get(hash);
 }
 
 export function getMemoriesByAgent(agentId: string, limit = 500): any[] {
@@ -240,6 +257,43 @@ export function runSalienceDecay(factor = 0.995): void {
 
 export function getPinnedMemories(agentId: string): any[] {
   return db.prepare('SELECT * FROM memories WHERE agent_id=? AND pinned=1 AND superseded_by IS NULL ORDER BY created_at DESC').all(agentId) as any[];
+}
+
+// ---------- Memory Retry Queue ----------
+export interface MemoryRetryEnqueue {
+  chat_id:       string;
+  agent_id:      string;
+  content:       string;
+  content_hash:  string;
+  last_error:    string | null;
+  next_retry_at: number;
+}
+
+export function enqueueMemoryRetry(entry: MemoryRetryEnqueue): void {
+  db.prepare(`
+    INSERT OR IGNORE INTO memory_retry_queue
+      (chat_id, agent_id, content, content_hash, attempts, last_error, next_retry_at, created_at)
+    VALUES (?, ?, ?, ?, 0, ?, ?, ?)
+  `).run(
+    entry.chat_id, entry.agent_id, entry.content, entry.content_hash,
+    entry.last_error, entry.next_retry_at, Date.now(),
+  );
+}
+
+export function getDueMemoryRetries(now: number, limit = 25): MemoryRetryRow[] {
+  return db.prepare(
+    'SELECT * FROM memory_retry_queue WHERE next_retry_at <= ? ORDER BY next_retry_at ASC LIMIT ?'
+  ).all(now, limit) as MemoryRetryRow[];
+}
+
+export function updateMemoryRetryAttempt(id: number, attempts: number, nextRetryAt: number, lastError: string | null): void {
+  db.prepare(
+    'UPDATE memory_retry_queue SET attempts=?, next_retry_at=?, last_error=? WHERE id=?'
+  ).run(attempts, nextRetryAt, lastError, id);
+}
+
+export function deleteMemoryRetry(id: number): void {
+  db.prepare('DELETE FROM memory_retry_queue WHERE id=?').run(id);
 }
 
 // ---------- Consolidations ----------

@@ -5,6 +5,7 @@ import { startDashboard } from './dashboard';
 import { listAgents } from './agent-config';
 import { setAlertHandler } from './agent-pool';
 import { startConsolidationLoop, stopConsolidationLoop } from './memory-consolidate';
+import { startMemoryRetryLoop, stopMemoryRetryLoop } from './memory-ingest';
 import { voiceProviderStatus } from './voice';
 
 async function main(): Promise<void> {
@@ -23,12 +24,14 @@ async function main(): Promise<void> {
   }
   startScheduler();
   for (const a of agents) startConsolidationLoop(a.id);
+  startMemoryRetryLoop();
 
   printBootManifest(dash.port);
 
   const shutdown = (signal: string) => {
     console.log(`\n[boot] ${signal} — shutting down`);
     try { stopScheduler(); } catch { /* noop */ }
+    try { stopMemoryRetryLoop(); } catch { /* noop */ }
     for (const a of agents) { try { stopConsolidationLoop(a.id); } catch { /* noop */ } }
     try { dash.close(); } catch { /* noop */ }
     try { (bot as any).stopPolling?.(); } catch { /* noop */ }
