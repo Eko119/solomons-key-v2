@@ -49,7 +49,8 @@ export function scheduleTask(opts: {
 
 async function runScheduledTask(task: any): Promise<void> {
   const now = Date.now();
-  const idempotencyKey = `${task.id}:${new Date(now).toISOString().slice(0, 10)}`;
+  const scheduledFireTime: number = task.next_run ?? now;
+  const idempotencyKey = `${task.id}:${scheduledFireTime}`;
 
   if (hasCompletedExecution(idempotencyKey)) {
     console.debug(`[scheduler] skip ${task.name} (${String(task.id).slice(0, 8)}) — already completed for ${idempotencyKey}`);
