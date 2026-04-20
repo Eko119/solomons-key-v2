@@ -69,3 +69,25 @@ export function handlePinAttempt(chatId: number, agentId: string, pin: string): 
   upsertSession(chatId, agentId);
   return { success: true, message: '✅ Unlocked.' };
 }
+
+// ---------- SEC-1: Inbound prompt-injection gate ----------
+// Patterns here are conservative flags for the most common prompt-injection
+// vectors. A hit yields { safe: false, reason } and the bot returns a fixed
+// rejection string — we never log the offending content itself, only the
+// reason code, so an attacker can't exfiltrate via audit log echoes.
+const INJECTION_PATTERNS: ReadonlyArray<{ pattern: RegExp; reason: string }> = [
+  { pattern: /ignore (?:all |previous |above |prior )?(?:instructions|rules|constraints)/i, reason: 'ignore-instructions' },
+  { pattern: /you are now\b/i, reason: 'persona-override' },
+  { pattern: /<\|im_(?:start|end)\|>/i, reason: 'im-token' },
+  { pattern: /\[\/?INST\]/i, reason: 'llama-inst' },
+  { pattern: /^system:/im, reason: 'system-prefix' },
+];
+
+export interface InboundScan { safe: boolean; reason?: string; }
+
+export function sanitizeInbound(text: string): InboundScan {
+  for (const { pattern, reason } of INJECTION_PATTERNS) {
+    if (pattern.test(text)) return { safe: false, reason };
+  }
+  return { safe: true };
+}

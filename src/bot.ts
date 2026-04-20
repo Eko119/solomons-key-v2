@@ -2,6 +2,7 @@ import TelegramBot from 'node-telegram-bot-api';
 import { config } from './config';
 import {
   handleAuth, handlePinAttempt, checkKillPhrase, isAllowedChatId,
+  sanitizeInbound,
 } from './security';
 import { dispatch, listAvailableSpecialists } from './orchestrator';
 import { formatCostFooter } from './agent';
@@ -97,6 +98,14 @@ async function handleMessage(bot: TelegramBot, chatId: number, text: string): Pr
     if (!auth.allowed) {
       if (auth.requirePin) pendingPin.set(chatId, { agentId: 'main' });
       if (auth.message) await send(bot, chatId, auth.message);
+      return;
+    }
+
+    const inbound = sanitizeInbound(text);
+    if (!inbound.safe) {
+      insertAuditLog(chatId, 'main', 'inbound_rejected', inbound.reason ?? 'unknown');
+      console.warn(`[bot] inbound rejected (reason=${inbound.reason ?? 'unknown'})`);
+      await send(bot, chatId, 'Message rejected.');
       return;
     }
 
