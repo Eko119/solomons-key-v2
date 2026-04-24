@@ -8,6 +8,9 @@ fs.mkdirSync(path.dirname(config.storePath), { recursive: true });
 
 const db = new Database(config.storePath);
 db.pragma('journal_mode = WAL');
+db.pragma('synchronous = NORMAL');
+db.pragma('busy_timeout = 5000');
+db.pragma('cache_size = -64000');
 db.pragma('foreign_keys = ON');
 
 function runMigrations(database: Database.Database, migrationsDir: string): void {
@@ -161,12 +164,6 @@ export function updateSessionActivity(chatId: number, agentId: string): void {
   db.prepare('UPDATE sessions SET last_activity=? WHERE chat_id=? AND agent_id=?').run(Date.now(), chatId, agentId);
 }
 
-export function isSessionLocked(chatId: number, agentId: string): boolean {
-  const s = getSession(chatId, agentId);
-  if (!s) return true;
-  return !!s.locked;
-}
-
 export function lockAllSessions(): void {
   db.prepare('UPDATE sessions SET locked=1').run();
 }
@@ -175,11 +172,6 @@ export function lockAllSessions(): void {
 export function saveConversationTurn(chatId: number, agentId: string, role: string, content: string, tokens = 0): void {
   db.prepare('INSERT INTO conversations (id, chat_id, agent_id, role, content, timestamp, tokens_used) VALUES (?, ?, ?, ?, ?, ?, ?)')
     .run(uuidv4(), chatId, agentId, role, content, Date.now(), tokens);
-}
-
-export function getRecentConversation(chatId: number, agentId: string, n = 20): any[] {
-  return db.prepare('SELECT * FROM conversations WHERE chat_id=? AND agent_id=? ORDER BY timestamp DESC LIMIT ?')
-    .all(chatId, agentId, n) as any[];
 }
 
 export function searchConversationHistory(keywords: string, agentId: string, dayWindow = 30, limit = 20): any[] {
@@ -239,20 +231,8 @@ export function updateSalience(id: string, newValue: number): void {
   db.prepare('UPDATE memories SET salience=?, last_accessed=? WHERE id=?').run(newValue, new Date().toISOString(), id);
 }
 
-export function pinMemory(id: string): void {
-  db.prepare('UPDATE memories SET pinned=1 WHERE id=?').run(id);
-}
-
-export function unpinMemory(id: string): void {
-  db.prepare('UPDATE memories SET pinned=0 WHERE id=?').run(id);
-}
-
 export function setSupersededBy(oldId: string, newId: string): void {
   db.prepare('UPDATE memories SET superseded_by=? WHERE id=?').run(newId, oldId);
-}
-
-export function runSalienceDecay(factor = 0.995): void {
-  db.prepare('UPDATE memories SET salience = salience * ? WHERE pinned=0 AND superseded_by IS NULL').run(factor);
 }
 
 export function getPinnedMemories(agentId: string): any[] {
@@ -310,10 +290,6 @@ export function getLatestConsolidations(agentId: string, n = 5): any[] {
 export function recordHiveActivity(agentId: string, action: string, summary?: string, artifacts?: string): void {
   db.prepare('INSERT INTO hive_mind (id, agent_id, action, summary, artifacts, timestamp) VALUES (?, ?, ?, ?, ?, ?)')
     .run(uuidv4(), agentId, action, summary ?? null, artifacts ?? null, Date.now());
-}
-
-export function getHiveActivity(agentId: string, limit = 50): any[] {
-  return db.prepare('SELECT * FROM hive_mind WHERE agent_id=? ORDER BY timestamp DESC LIMIT ?').all(agentId, limit) as any[];
 }
 
 export function getAllAgentActivity(limit = 100): any[] {

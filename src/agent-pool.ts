@@ -233,7 +233,7 @@ function runOne(task: PoolTask, startDelay: number): Promise<PoolResult> {
 
       resolve({
         id:           task.id,
-        output:       (run.finalResponse || doneEnv?.payload || '').trim(),
+        output:       (doneEnv?.payload ?? run.finalResponse ?? '').trim(),
         exitCode:     run.isError ? -1 : 0,
         durationMs:   Date.now() - start,
         sentinelSeen: !!doneEnv,

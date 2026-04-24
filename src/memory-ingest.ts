@@ -161,12 +161,6 @@ async function persistMemory(
   }
 }
 
-export function evaluateRelevance(memoryId: string, currentSalience: number, wasUsed: boolean): void {
-  const delta = wasUsed ? 0.1 : -0.05;
-  const next = Math.max(0, Math.min(1, currentSalience + delta));
-  updateSalience(memoryId, next);
-}
-
 // ---------- Retry loop ----------
 
 let retryTimer: NodeJS.Timeout | null = null;

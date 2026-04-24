@@ -96,9 +96,10 @@ export async function runAgent(opts: QueryOptions): Promise<AgentResult> {
   }
 
   const sessionId = run.sessionId || opts.sessionId || uuidv4();
+  const finalText = run.envelopes.find(e => e.type === 'done')?.payload ?? run.finalResponse;
 
   saveConversationTurn(opts.chatId, opts.agentId, 'user', opts.prompt, 0);
-  saveConversationTurn(opts.chatId, opts.agentId, 'assistant', run.finalResponse, run.outputTokens);
+  saveConversationTurn(opts.chatId, opts.agentId, 'assistant', finalText, run.outputTokens);
   recordTokenUsage({
     id: uuidv4(), agent_id: opts.agentId, chat_id: opts.chatId,
     input_tokens: run.inputTokens, output_tokens: run.outputTokens,
@@ -107,7 +108,7 @@ export async function runAgent(opts: QueryOptions): Promise<AgentResult> {
   recordHiveActivity(opts.agentId, 'query', opts.prompt.slice(0, 120));
 
   return {
-    response:     run.finalResponse,
+    response:     finalText,
     sessionId,
     inputTokens:  run.inputTokens,
     outputTokens: run.outputTokens,
@@ -134,9 +135,10 @@ async function runCheckpoint(
       console.warn(`[agent:${agentId}] checkpoint produced no summary — next turn starts cold`);
       recordHiveActivity(agentId, 'checkpoint', '(no summary)');
     } else {
-      setPendingCheckpointSummary(chatId, agentId, ckRun.finalResponse);
-      recordHiveActivity(agentId, 'checkpoint', ckRun.finalResponse.slice(0, 120));
-      console.info(`[agent:${agentId}] checkpoint summary stashed (${ckRun.finalResponse.length} chars, total tokens ${getAgentTokenTotal(chatId, agentId)})`);
+      const ckText = ckRun.envelopes.find(e => e.type === 'done')?.payload ?? ckRun.finalResponse;
+      setPendingCheckpointSummary(chatId, agentId, ckText);
+      recordHiveActivity(agentId, 'checkpoint', ckText.slice(0, 120));
+      console.info(`[agent:${agentId}] checkpoint summary stashed (${ckText.length} chars, total tokens ${getAgentTokenTotal(chatId, agentId)})`);
     }
 
     const shutdownReq = createShutdownRequest();

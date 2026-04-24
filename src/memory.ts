@@ -14,7 +14,6 @@ export interface MemoryContext {
 
 const SEMANTIC_THRESHOLD = 0.6;
 const SEMANTIC_TOP_K = 10;
-const lastNudge: Map<string, number> = new Map();
 
 function fetchMemoriesByIds(ids: string[]): any[] {
   if (!ids.length) return [];
@@ -85,13 +84,4 @@ export function formatContext(ctx: MemoryContext): string {
     parts.push('## Recent conversation\n' + ctx.conversation.slice(0, 5).map((c: any) => `- ${c.role}: ${String(c.content).slice(0, 200)}`).join('\n'));
   }
   return parts.join('\n\n');
-}
-
-export function shouldNudge(agentId: string, chatId: number, minIntervalMs = 30 * 60_000): boolean {
-  const key = `${agentId}:${chatId}`;
-  const last = lastNudge.get(key) || 0;
-  const now = Date.now();
-  if (now - last < minIntervalMs) return false;
-  lastNudge.set(key, now);
-  return true;
 }
