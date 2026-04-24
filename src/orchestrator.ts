@@ -7,7 +7,18 @@ import { sanitizeOutput } from './exfiltration-guard';
 import { insertAuditLog } from './db';
 
 function logEnvelope(agentId: string, env: AgentResponse): void {
-  console.debug(`[orch:${agentId}] envelope ${JSON.stringify(env)}`);
+  switch (env.type) {
+    case 'error':
+      console.warn(`[orch:${agentId}] agent error: ${env.payload}`);
+      insertAuditLog(null, agentId, 'agent_error_envelope', env.payload.slice(0, 200));
+      break;
+    case 'done':
+      console.debug(`[orch:${agentId}] done envelope received`);
+      break;
+    default:
+      console.debug(`[orch:${agentId}] envelope type=${env.type}`);
+      break;
+  }
 }
 
 const MENTION_RE = /@(\w+)/g;
