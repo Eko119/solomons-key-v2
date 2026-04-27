@@ -1,4 +1,4 @@
-import { runAgentEnvelope, createTaskRequest } from './agent-create';
+import { runAgentEnvelope, createTaskRequest, McpServerEntry } from './agent-create';
 import { AgentResponse, AGENT_IDS } from './agent-config';
 
 export interface PoolTask {
@@ -8,6 +8,7 @@ export interface PoolTask {
   cwd?:          string;
   systemAppend?: string;
   allowedTools?: string[];
+  mcpConfig?:    McpServerEntry[];
   onEnvelope?:   (env: AgentResponse) => void;
 }
 
@@ -216,6 +217,7 @@ function runOne(task: PoolTask, startDelay: number): Promise<PoolResult> {
         model:        task.model,
         systemPrompt: task.systemAppend,
         allowedTools: task.allowedTools,
+        mcpConfig:    task.mcpConfig,
         cwd:          task.cwd,
         onEnvelope:   task.onEnvelope,
         onStart:      (pid) => setAgentPid(task.id, pid),

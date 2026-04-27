@@ -10,6 +10,7 @@ import {
 import { listAgents } from './agent-config';
 import { listAgentHealth } from './agent-pool';
 import { isWarroomAvailable } from './agent-voice-bridge';
+import { getMcpStatus } from './orchestrator';
 
 export function buildApp(): Hono {
   const app = new Hono();
@@ -33,7 +34,8 @@ export function buildApp(): Hono {
     }));
     const sessions = rawDb().prepare('SELECT chat_id, agent_id, last_activity, locked FROM sessions ORDER BY last_activity DESC LIMIT 20').all();
     const warroom: 'up' | 'down' = isWarroomAvailable() ? 'up' : 'down';
-    return c.json({ agents, sessions, warroom });
+    const mcp = getMcpStatus();
+    return c.json({ agents, sessions, warroom, mcp });
   });
 
   app.get('/api/agents', c => {

@@ -46,6 +46,8 @@ export const config = {
   storePath: process.env.STORE_PATH || path.join(process.cwd(), 'store', 'solomons-key.db'),
   solomonsKeyConfig: process.env.SOLOMONS_KEY_CONFIG || path.join(process.env.HOME || '~', '.solomons-key'),
 
+  mcpConfigPath: process.env.MCP_CONFIG_PATH || '',
+
   deepgramApiKey: process.env.DEEPGRAM_API_KEY,
   cartesiaApiKey: process.env.CARTESIA_API_KEY,
   groqApiKey: process.env.GROQ_API_KEY,

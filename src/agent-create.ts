@@ -1,4 +1,7 @@
 import { spawn } from 'child_process';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import { config } from './config';
 import {
@@ -10,11 +13,22 @@ const DEFAULT_TIMEOUT_MS = 120_000;
 
 export const CHECKPOINT_PROMPT = 'Summarize your progress so far in under 500 words, then stop.';
 
+export interface McpServerEntry {
+  name:      string;
+  transport: 'stdio' | 'http';
+  command?:  string;
+  args?:     string[];
+  url?:      string;
+  headers?:  Record<string, string>;
+  env?:      Record<string, string>;
+}
+
 export interface RunAgentOptions {
   agentId:       string;
   model?:        string;
   systemPrompt?: string;
   allowedTools?: string[];
+  mcpConfig?:    McpServerEntry[];
   cwd?:          string;
   sessionId?:    string;
   timeoutMs?:    number;
@@ -136,7 +150,30 @@ export async function runAgentEnvelope(req: AgentRequest, opts: RunAgentOptions)
   if (opts.sessionId) args.push('--resume', opts.sessionId);
   if (opts.systemPrompt) args.push('--append-system-prompt', opts.systemPrompt);
   if (opts.allowedTools?.length) args.push('--allowed-tools', opts.allowedTools.join(','));
+
+  let mcpTmpFile: string | null = null;
+  if (opts.mcpConfig?.length) {
+    const mcpJson: Record<string, any> = {};
+    for (const s of opts.mcpConfig) {
+      if (s.transport === 'stdio' && s.command) {
+        mcpJson[s.name] = { command: s.command, args: s.args ?? [], env: s.env ?? {} };
+      } else if (s.transport === 'http' && s.url) {
+        mcpJson[s.name] = { url: s.url, headers: s.headers ?? {} };
+      }
+    }
+    mcpTmpFile = path.join(os.tmpdir(), `sk-mcp-${uuidv4()}.json`);
+    fs.writeFileSync(mcpTmpFile, JSON.stringify({ mcpServers: mcpJson }));
+    args.push('--mcp-config', mcpTmpFile, '--strict-mcp-config');
+  }
+
   args.push('-p', req.payload);
+
+  const cleanupMcpTmp = (): void => {
+    if (mcpTmpFile) {
+      try { fs.unlinkSync(mcpTmpFile); } catch { /* already gone */ }
+      mcpTmpFile = null;
+    }
+  };
 
   return new Promise<AgentRunResult>(resolve => {
     const child = spawn('claude', args, {
@@ -213,6 +250,7 @@ export async function runAgentEnvelope(req: AgentRequest, opts: RunAgentOptions)
     child.stderr.on('data', (d: Buffer) => { stderrBuf += d.toString(); });
 
     child.on('close', (code) => {
+      cleanupMcpTmp();
       if (finalized) return;
       finalized = true;
       if (timer) clearTimeout(timer);
@@ -245,6 +283,7 @@ export async function runAgentEnvelope(req: AgentRequest, opts: RunAgentOptions)
     });
 
     child.on('error', (err) => {
+      cleanupMcpTmp();
       if (finalized) return;
       finalized = true;
       if (timer) clearTimeout(timer);

@@ -8,6 +8,7 @@ import { startConsolidationLoop, stopConsolidationLoop } from './memory-consolid
 import { startMemoryRetryLoop, stopMemoryRetryLoop } from './memory-ingest';
 import { startWarroomHealthProbe, stopWarroomHealthProbe } from './agent-voice-bridge';
 import { voiceProviderStatus } from './voice';
+import { bootMcpServers } from './orchestrator';
 
 async function main(): Promise<void> {
   validateConfig();
@@ -23,6 +24,7 @@ async function main(): Promise<void> {
       });
     });
   }
+  await bootMcpServers();
   startScheduler();
   for (const a of agents) startConsolidationLoop(a.id);
   startMemoryRetryLoop();

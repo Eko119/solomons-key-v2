@@ -3,7 +3,7 @@ import { config } from './config';
 import { saveConversationTurn, recordHiveActivity, recordTokenUsage } from './db';
 import {
   runAgentEnvelope, createTaskRequest, createCheckpointRequest, createShutdownRequest,
-  RunAgentOptions,
+  RunAgentOptions, McpServerEntry,
 } from './agent-create';
 import { AgentResponse } from './agent-config';
 import {
@@ -20,6 +20,7 @@ export interface QueryOptions {
   systemPrompt?: string;
   cwd?:          string;
   allowedTools?: string[];
+  mcpConfig?:    McpServerEntry[];
   model?:        string;
   sessionId?:    string;
   maxTurns?:     number;
@@ -62,6 +63,7 @@ export async function runAgent(opts: QueryOptions): Promise<AgentResult> {
     model:        opts.model,
     systemPrompt: opts.systemPrompt,
     allowedTools: opts.allowedTools,
+    mcpConfig:    opts.mcpConfig,
     cwd:          opts.cwd,
     sessionId:    effectiveSessionId,
     timeoutMs:    config.agentTimeoutMs,

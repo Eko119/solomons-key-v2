@@ -1,10 +1,88 @@
+import fs from 'fs';
+import { Client } from '@modelcontextprotocol/sdk/client';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { runAgent, AgentResult, classifyMessage } from './agent';
 import { runSubprocessPool, PoolTask } from './agent-pool';
+import { McpServerEntry } from './agent-create';
 import { getAgent, listSpecialists, isValidAgentId, AgentResponse } from './agent-config';
 import { retrieveContext, formatContext } from './memory';
 import { ingestConversation } from './memory-ingest';
 import { sanitizeOutput } from './exfiltration-guard';
 import { insertAuditLog } from './db';
+import { config } from './config';
+
+// ---------- MCP Client Layer ----------
+
+interface McpServerState {
+  entry:     McpServerEntry;
+  healthy:   boolean;
+  toolCount: number;
+}
+
+const mcpServers: Map<string, McpServerState> = new Map();
+
+export function getMcpStatus(): { name: string; healthy: boolean; toolCount: number }[] {
+  return [...mcpServers.values()].map(s => ({ name: s.entry.name, healthy: s.healthy, toolCount: s.toolCount }));
+}
+
+export function getMcpConfigForAgent(agentId: string): McpServerEntry[] {
+  const def = getAgent(agentId);
+  if (!def.mcpServers.length) return [];
+  return def.mcpServers
+    .filter(name => mcpServers.has(name) && mcpServers.get(name)!.healthy)
+    .map(name => mcpServers.get(name)!.entry);
+}
+
+export async function bootMcpServers(): Promise<void> {
+  if (!config.mcpConfigPath) return;
+  let entries: McpServerEntry[];
+  try {
+    const raw = fs.readFileSync(config.mcpConfigPath, 'utf-8');
+    const parsed = JSON.parse(raw);
+    entries = Array.isArray(parsed) ? parsed : [];
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`[mcp] failed to load config from ${config.mcpConfigPath}: ${msg}`);
+    return;
+  }
+
+  for (const entry of entries) {
+    const state: McpServerState = { entry, healthy: false, toolCount: 0 };
+    mcpServers.set(entry.name, state);
+
+    let transport;
+    try {
+      if (entry.transport === 'stdio' && entry.command) {
+        transport = new StdioClientTransport({ command: entry.command, args: entry.args, env: entry.env });
+      } else if (entry.transport === 'http' && entry.url) {
+        transport = new StreamableHTTPClientTransport(new URL(entry.url), { requestInit: { headers: entry.headers ?? {} } });
+      } else {
+        console.warn(`[mcp] ${entry.name}: invalid transport config — skipping`);
+        continue;
+      }
+
+      const client = new Client({ name: 'solomons-key', version: '2.0' });
+      await client.connect(transport);
+      const tools = await client.listTools();
+      state.healthy = true;
+      state.toolCount = tools.tools.length;
+      console.info(`[mcp] ${entry.name}: connected — ${state.toolCount} tools`);
+      insertAuditLog(null, null, 'mcp_server_connected', `${entry.name} (${state.toolCount} tools)`);
+      await client.close();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[mcp] ${entry.name}: health check failed — ${msg}`);
+      insertAuditLog(null, null, 'mcp_server_unhealthy', `${entry.name}: ${msg.slice(0, 200)}`);
+    }
+  }
+
+  const total = mcpServers.size;
+  const healthy = [...mcpServers.values()].filter(s => s.healthy).length;
+  console.info(`[mcp] boot complete — ${healthy}/${total} servers healthy`);
+}
+
+// ---------- Envelope Logging ----------
 
 function logEnvelope(agentId: string, env: AgentResponse): void {
   switch (env.type) {
@@ -77,12 +155,15 @@ async function runSingle(agentId: string, opts: DispatchOptions): Promise<Dispat
   const def = getAgent(agentId);
   const systemPrompt = await buildSystemPrompt(agentId, opts.chatId, opts.text);
 
+  const mcpConfig = getMcpConfigForAgent(agentId);
+
   const result = await runAgent({
     agentId,
     chatId: opts.chatId,
     prompt: opts.text,
     systemPrompt,
     allowedTools: def.tools,
+    mcpConfig: mcpConfig.length ? mcpConfig : undefined,
     model: def.model,
     sessionId: opts.sessionId,
     maxTurns: def.maxTurns,
@@ -104,12 +185,14 @@ async function runFanOut(agentIds: string[], opts: DispatchOptions): Promise<Dis
   for (const id of agentIds.slice(0, 5)) {
     const def = getAgent(id);
     const systemPrompt = await buildSystemPrompt(id, opts.chatId, opts.text);
+    const agentMcp = getMcpConfigForAgent(id);
     tasks.push({
       id,
       prompt: opts.text,
       model: def.model,
       systemAppend: systemPrompt,
       allowedTools: def.tools,
+      mcpConfig: agentMcp.length ? agentMcp : undefined,
       onEnvelope: (env) => logEnvelope(id, env),
     });
   }

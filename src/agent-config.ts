@@ -31,6 +31,7 @@ export interface AgentDefinition {
   description: string;
   model: string;
   tools: string[];
+  mcpServers: string[];
   maxTurns: number;
   systemPrompt: string;
   dir: string;
@@ -61,6 +62,7 @@ function loadOne(id: string): AgentDefinition {
     description: parsed.description ?? '',
     model: parsed.model ?? (id === 'main' ? config.mainModel : config.agentModel),
     tools: Array.isArray(parsed.tools) ? parsed.tools : [],
+    mcpServers: Array.isArray(parsed.mcpServers) ? parsed.mcpServers : [],
     maxTurns: Number(parsed.maxTurns) || config.agentMaxTurns,
     systemPrompt,
     dir,
