@@ -63,13 +63,17 @@ export async function bootMcpServers(): Promise<void> {
       }
 
       const client = new Client({ name: 'solomons-key', version: '2.0' });
-      await client.connect(transport);
-      const tools = await client.listTools();
+      const MCP_BOOT_TIMEOUT_MS = 10_000;
+      const timeout = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('MCP health check timed out (10s) — cold npx cache?')), MCP_BOOT_TIMEOUT_MS),
+      );
+      await Promise.race([client.connect(transport), timeout]);
+      const tools = await Promise.race([client.listTools(), timeout]);
       state.healthy = true;
       state.toolCount = tools.tools.length;
       console.info(`[mcp] ${entry.name}: connected — ${state.toolCount} tools`);
       insertAuditLog(null, null, 'mcp_server_connected', `${entry.name} (${state.toolCount} tools)`);
-      await client.close();
+      await client.close().catch(() => {});
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       console.warn(`[mcp] ${entry.name}: health check failed — ${msg}`);
