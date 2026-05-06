@@ -444,3 +444,5 @@ export function listMeetSessions(limit = 50): any[] {
 }
 
 export function rawDb(): any { return db; }
+
+export function getDb(): Database.Database { return db; }
