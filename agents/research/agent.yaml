@@ -12,3 +12,4 @@ tools:
 maxTurns: 30
 mcpServers:
   - filesystem
+  - research-fetch
