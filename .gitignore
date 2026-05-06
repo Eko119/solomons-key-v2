@@ -3,6 +3,7 @@ node_modules/
 dist/
 store/solomons-key.db
 store/*.db
+data/*.db
 *.db-shm
 *.db-wal
 __pycache__/
