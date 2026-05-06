@@ -10,3 +10,5 @@ tools:
   - WebFetch
   - WebSearch
 maxTurns: 30
+mcpServers:
+  - core-memory
