@@ -11,8 +11,9 @@ import type { ProposalOp } from './ops';
 // ── Entity key extraction ─────────────────────────────────────────────────────
 // Returns the unique identifier for the logical entity an op targets.
 // Two ops with the same key conflict by definition.
+// Exported so callers can inspect entity identity without re-implementing the mapping.
 
-function entityKey(op: ProposalOp): string {
+export function entityKey(op: ProposalOp): string {
   switch (op.type) {
     case 'ADD_TRANSITION':
     case 'REMOVE_TRANSITION':

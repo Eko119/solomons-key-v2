@@ -11,7 +11,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, unlinkSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 // Stub env vars before any module import.
@@ -32,8 +32,8 @@ for (const [k, v] of Object.entries(STUBS)) {
 
 import { createProposal, submitForApproval } from '../src/governance/proposer';
 import { applyProposalTransition, ProposalTransitionError } from '../src/governance/ledger';
-import { dbGetProposal } from '../src/governance/db';
-import { runBootloader } from '../src/governance/bootloader';
+import { dbGetProposal, dbAtomicLockForMerging } from '../src/governance/db';
+import { runBootloader, recoverMergingProposals } from '../src/governance/bootloader';
 
 const PROJECT_ROOT  = resolve(__dirname, '..');
 const PROD_TLA_PATH = resolve(PROJECT_ROOT, 'formal_specs', 'efsm.tla');
@@ -197,15 +197,73 @@ async function testDeterministicReplay(): Promise<void> {
   assert.equal(r2.status, 'lock_failed', 'second bootloader run on same ID must return lock_failed');
 }
 
+// ── Test 6: Crash recovery for MERGING proposals ─────────────────────────────
+// Simulates a crash after APPROVED→MERGING lock but before staging completes.
+// recoverMergingProposals must restage from DB, verify, and resolve deterministically.
+
+async function testCrashRecoveryMerging(): Promise<void> {
+  const id         = uid();
+  const now        = Date.now();
+  const targetFile = 'src/migrations/9999_recovery_test.sql';
+  const targetPath = resolve(PROJECT_ROOT, targetFile);
+  const stagedPath = resolve(PROJECT_ROOT, 'src', 'migrations', '9999_recovery_test.staged.sql');
+
+  // Cleanup any artifacts from a previous failed run.
+  if (existsSync(targetPath)) { try { unlinkSync(targetPath); } catch { /* */ } }
+  if (existsSync(stagedPath)) { try { unlinkSync(stagedPath); } catch { /* */ } }
+
+  try {
+    // Build a proposal for a simple SQL migration (passes Phase 12 trivially).
+    createProposal({
+      id,
+      target_layer: 'SQL_MIGRATION',
+      diff: { targetFile, content: '-- crash recovery test\nSELECT 1;\n' },
+      justification: 'crash recovery test',
+    }, now);
+    submitForApproval(id, now + 1);
+    applyProposalTransition(id, 'PENDING_APPROVAL', 'APPROVED', now + 2);
+
+    // Simulate bootloader acquiring the lock then crashing before writing staged file.
+    const locked = dbAtomicLockForMerging(id);
+    assert.equal(locked, 1, 'lock must be acquired');
+
+    const p = dbGetProposal(id);
+    assert.equal(p!.status, 'MERGING', 'proposal must be in MERGING (crashed state)');
+
+    // No staged file exists — crash happened before staging.
+    assert.ok(!existsSync(stagedPath), 'no orphan staged file should exist yet');
+
+    // Recovery must resolve the proposal deterministically.
+    const result = recoverMergingProposals(now + 3);
+    assert.ok(result.recovered >= 1, `must recover at least 1 proposal, got ${result.recovered}`);
+
+    const recovered = dbGetProposal(id);
+    assert.ok(recovered, 'proposal must exist after recovery');
+    assert.equal(recovered!.status, 'MERGED', `proposal must be MERGED after recovery, got ${recovered!.status}`);
+
+    // Production file must exist and contain the correct content.
+    assert.ok(existsSync(targetPath), 'production migration file must be written by recovery');
+    const written = readFileSync(targetPath, 'utf8');
+    assert.ok(written.includes('crash recovery test'), 'production file must contain the correct content');
+
+    // Staged file must be cleaned up.
+    assert.ok(!existsSync(stagedPath), 'staged file must not persist after recovery');
+  } finally {
+    if (existsSync(targetPath)) { try { unlinkSync(targetPath); } catch { /* */ } }
+    if (existsSync(stagedPath)) { try { unlinkSync(stagedPath); } catch { /* */ } }
+  }
+}
+
 // ── Runner ───────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
   const tests: Array<[string, () => Promise<void>]> = [
-    ['no self-approval path',  testNoSelfApproval],
-    ['bootloader exclusivity', testBootloaderExclusivity],
-    ['atomic failure safety',  testAtomicFailureSafety],
-    ['staging isolation',      testStagingIsolation],
-    ['deterministic replay',   testDeterministicReplay],
+    ['no self-approval path',         testNoSelfApproval],
+    ['bootloader exclusivity',        testBootloaderExclusivity],
+    ['atomic failure safety',         testAtomicFailureSafety],
+    ['staging isolation',             testStagingIsolation],
+    ['deterministic replay',          testDeterministicReplay],
+    ['crash recovery MERGING → MERGED', testCrashRecoveryMerging],
   ];
 
   let passed = 0;
