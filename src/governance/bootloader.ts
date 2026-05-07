@@ -87,11 +87,14 @@ export function runBootloader(proposalId: string, now: number): BootloaderResult
   }
 
   // ── Step 3: Phase 12 verification gate ──────────────────────────────────────
-  // Pass staged file path via env var so verify-efsm.ts checks staged content.
+  // Set env var overrides based on WHAT FILE is being staged, not the target_layer.
+  // efsm.tla   → VERIFY_TLA_PATH (verifier reads staged spec)
+  // state-machine.ts → VERIFY_SM_PATH (verifier reads staged projections)
+  // Any other file (migration SQL, etc.) → no override (verifier reads current files)
   const env: NodeJS.ProcessEnv = { ...process.env };
-  if (proposal.target_layer === 'TLA_SPEC') {
+  if (diff.targetFile.endsWith('efsm.tla')) {
     env['VERIFY_TLA_PATH'] = staged;
-  } else if (proposal.target_layer === 'SQL_MIGRATION' || proposal.target_layer === 'CAPABILITY_REGISTRY') {
+  } else if (diff.targetFile.endsWith('state-machine.ts')) {
     env['VERIFY_SM_PATH'] = staged;
   }
 
