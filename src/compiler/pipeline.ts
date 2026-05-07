@@ -6,6 +6,7 @@ import { readFileSync, writeFileSync, unlinkSync, existsSync, readdirSync } from
 import { resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { ProposalDiffV1Schema } from './schema';
+import { validateComposition } from './composition';
 import { compileProposal } from './phase14-compiler';
 import { createProposal, submitForApproval } from '../governance/proposer';
 import { applyProposalTransition } from '../governance/ledger';
@@ -157,10 +158,22 @@ export function executeProposalPipeline(
   }
   const diff = parsed.data;
 
-  // ── Deterministic compilation ────────────────────────────────────────────
+  // ── Composition validation (hard gate) ──────────────────────────────────
+  // Prevents "legal but lethal" same-entity contradictions and order-unsafe
+  // combinations. Also normalizes ops into canonical sort order before compile.
+  const composition = validateComposition(diff.ops);
+  if (!composition.valid) {
+    return {
+      status: 'validation_error',
+      reason: `Composition violations: ${composition.violations.join('; ')}`,
+    };
+  }
+  const normalizedDiff = { version: 'v1' as const, ops: composition.normalizedOps as typeof diff.ops };
+
+  // ── Deterministic compilation (on normalized ops) ────────────────────────
   let artifact;
   try {
-    artifact = compileProposal(diff);
+    artifact = compileProposal(normalizedDiff);
   } catch (e: unknown) {
     return {
       status: 'compile_error',

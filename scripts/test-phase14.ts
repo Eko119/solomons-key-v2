@@ -42,7 +42,9 @@ for (const [k, v] of Object.entries(STUBS)) {
 
 import { ProposalDiffV1Schema } from '../src/compiler/schema';
 import { compileProposal } from '../src/compiler/phase14-compiler';
+import { validateComposition, normalizeOps } from '../src/compiler/composition';
 import { executeProposalPipeline } from '../src/compiler/pipeline';
+import type { ProposalOp } from '../src/compiler/ops';
 
 const PROJECT_ROOT = resolve(__dirname, '..');
 
@@ -301,6 +303,117 @@ async function testDeterministicReplay(): Promise<void> {
   assert.equal(JSON.stringify(art1), JSON.stringify(art2), 'JSON serialization must be identical');
 }
 
+// ─── 15. Composition: ADD + REMOVE same transition → invalid ─────────────────
+async function testCompositionRejectAddRemoveTransition(): Promise<void> {
+  const ops: ProposalOp[] = [
+    { type: 'ADD_TRANSITION',    from: 'EXECUTING', to: 'CANCELLED' },
+    { type: 'REMOVE_TRANSITION', from: 'EXECUTING', to: 'CANCELLED' },
+  ];
+  const result = validateComposition(ops);
+  assert.ok(!result.valid, 'ADD + REMOVE same transition must be invalid');
+  assert.ok(result.violations.length > 0, 'must report a violation');
+  assert.ok(result.violations[0]!.includes('TRANSITION:EXECUTING:CANCELLED'), 'violation must name the entity');
+  assert.ok(result.violations[0]!.toLowerCase().includes('contradiction'), 'must classify as Contradiction');
+}
+
+// ─── 16. Composition: ADD + REVOKE same capability → invalid ─────────────────
+async function testCompositionRejectAddRevokeCapability(): Promise<void> {
+  const ops: ProposalOp[] = [
+    { type: 'ADD_CAPABILITY',    name: 'web_search', description: 'Search' },
+    { type: 'REVOKE_CAPABILITY', name: 'web_search' },
+  ];
+  const result = validateComposition(ops);
+  assert.ok(!result.valid, 'ADD + REVOKE same capability must be invalid');
+  assert.ok(result.violations[0]!.includes('CAPABILITY:web_search'), 'violation must name the entity');
+  assert.ok(result.violations[0]!.toLowerCase().includes('contradiction'), 'must classify as Contradiction');
+}
+
+// ─── 17. Composition: ADD + MODIFY same table → invalid ──────────────────────
+async function testCompositionRejectAddModifyTable(): Promise<void> {
+  const ops: ProposalOp[] = [
+    { type: 'ADD_TABLE',    tableName: 'my_tbl', columns: [{ name: 'id', type: 'TEXT' }] },
+    { type: 'MODIFY_TABLE', tableName: 'my_tbl', addColumns: [{ name: 'val', type: 'INTEGER' }] },
+  ];
+  const result = validateComposition(ops);
+  assert.ok(!result.valid, 'ADD_TABLE + MODIFY_TABLE on same table must be invalid');
+  assert.ok(result.violations[0]!.includes('TABLE:my_tbl'), 'violation must name the entity');
+}
+
+// ─── 18. Composition: ADD + REMOVE same constraint → invalid ─────────────────
+async function testCompositionRejectAddRemoveConstraint(): Promise<void> {
+  const ops: ProposalOp[] = [
+    { type: 'ADD_CONSTRAINT',    name: 'MyInvariant', predicate: '\\A t \\in Tasks : TRUE' },
+    { type: 'REMOVE_CONSTRAINT', name: 'MyInvariant' },
+  ];
+  const result = validateComposition(ops);
+  assert.ok(!result.valid, 'ADD + REMOVE same constraint must be invalid');
+  assert.ok(result.violations[0]!.includes('CONSTRAINT:MyInvariant'), 'violation must name the entity');
+}
+
+// ─── 19. Composition: ops on different entities → valid ──────────────────────
+async function testCompositionAllowDifferentEntities(): Promise<void> {
+  const ops: ProposalOp[] = [
+    { type: 'ADD_TRANSITION', from: 'EXECUTING', to: 'CANCELLED' },
+    { type: 'ADD_TRANSITION', from: 'FAILED',    to: 'CANCELLED' },  // different (from,to) pair
+    { type: 'ADD_CAPABILITY', name: 'cap_x', description: 'X' },
+    { type: 'ADD_TABLE', tableName: 'tbl_y', columns: [{ name: 'id', type: 'TEXT' }] },
+  ];
+  const result = validateComposition(ops);
+  assert.ok(result.valid, 'ops on distinct entities must pass composition');
+  assert.equal(result.violations.length, 0, 'no violations expected');
+}
+
+// ─── 20. Normalization: canonical order regardless of input order ──────────────
+async function testNormalizationOrder(): Promise<void> {
+  // Same ops in reversed order — normalized result must be identical.
+  const ops1: ProposalOp[] = [
+    { type: 'ADD_CAPABILITY', name: 'cap_a', description: 'A' },
+    { type: 'ADD_TABLE',      tableName: 'tbl_a', columns: [{ name: 'id', type: 'TEXT' }] },
+    { type: 'ADD_TRANSITION', from: 'FAILED', to: 'CANCELLED' },
+  ];
+  const ops2 = [...ops1].reverse() as ProposalOp[];
+
+  const norm1 = normalizeOps(ops1);
+  const norm2 = normalizeOps(ops2);
+
+  assert.deepEqual(norm1, norm2, 'reversed input must normalize to identical order');
+
+  // First op after normalization must be ADD_TABLE (order 1).
+  assert.equal(norm1[0]!.type, 'ADD_TABLE', 'ADD_TABLE must sort first');
+  // Second must be ADD_TRANSITION (order 3).
+  assert.equal(norm1[1]!.type, 'ADD_TRANSITION', 'ADD_TRANSITION must sort second');
+  // Third must be ADD_CAPABILITY (order 8).
+  assert.equal(norm1[2]!.type, 'ADD_CAPABILITY', 'ADD_CAPABILITY must sort last');
+}
+
+// ─── 21. Normalization stability: same input → same output ────────────────────
+async function testNormalizationStability(): Promise<void> {
+  const ops: ProposalOp[] = [
+    { type: 'ADD_CAPABILITY', name: 'cap_b', description: 'B' },
+    { type: 'ADD_CAPABILITY', name: 'cap_a', description: 'A' },
+  ];
+  const n1 = normalizeOps(ops);
+  const n2 = normalizeOps(ops);
+  assert.deepEqual(n1, n2, 'normalization must be stable across calls');
+  // Within same type, sort by entity key (cap_a < cap_b lexicographically).
+  assert.equal((n1[0] as { name: string }).name, 'cap_a', 'cap_a must sort before cap_b');
+}
+
+// ─── 22. Pipeline rejects contradictory ops via composition gate ───────────────
+async function testPipelineCompositionGate(): Promise<void> {
+  const input = {
+    version: 'v1',
+    ops: [
+      { type: 'ADD_CAPABILITY',    name: 'conflict_cap', description: 'X' },
+      { type: 'REVOKE_CAPABILITY', name: 'conflict_cap' },
+    ],
+  };
+  const result = executeProposalPipeline(input, uid(), 'contradiction test', Date.now());
+  assert.equal(result.status, 'validation_error', 'contradictory ops must return validation_error');
+  assert.ok(result.reason?.includes('Composition violations'), 'reason must reference composition violations');
+  assert.ok(result.reason?.includes('CAPABILITY:conflict_cap'), 'reason must name the conflicting entity');
+}
+
 // ── Runner ────────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
@@ -319,6 +432,14 @@ async function main(): Promise<void> {
     ['pipeline ADD_CAPABILITY → committed',  testPipelineAddCapability],
     ['pipeline invalid input → error',      testPipelineValidationError],
     ['deterministic replay',               testDeterministicReplay],
+    ['composition: ADD+REMOVE transition → invalid',  testCompositionRejectAddRemoveTransition],
+    ['composition: ADD+REVOKE capability → invalid',  testCompositionRejectAddRevokeCapability],
+    ['composition: ADD+MODIFY same table → invalid',  testCompositionRejectAddModifyTable],
+    ['composition: ADD+REMOVE constraint → invalid',  testCompositionRejectAddRemoveConstraint],
+    ['composition: different entities → valid',       testCompositionAllowDifferentEntities],
+    ['normalization: canonical order enforced',       testNormalizationOrder],
+    ['normalization: stable across calls',            testNormalizationStability],
+    ['pipeline: composition gate rejects contradictions', testPipelineCompositionGate],
   ];
 
   let passed = 0;
