@@ -43,6 +43,23 @@ function transitionId(
     .digest('hex');
 }
 
+// ── SQL projection table (for formal verification) ──────────────────────────
+// Literal SQL patterns extracted by scripts/verify-efsm.ts.
+// Must stay in 1:1 correspondence with the TRANSITION comments in
+// formal_specs/efsm.tla and with the UPDATE statements executed at runtime.
+
+export const TRANSITION_SQL_PROJECTIONS: ReadonlyArray<string> = [
+  "UPDATE task_nodes SET state='PENDING' WHERE state='DRAFTED'",
+  "UPDATE task_nodes SET state='EXECUTING' WHERE state='PENDING'",
+  "UPDATE task_nodes SET state='CANCELLED' WHERE state='PENDING'",
+  "UPDATE task_nodes SET state='VERIFYING' WHERE state='EXECUTING'",
+  "UPDATE task_nodes SET state='FAILED' WHERE state='EXECUTING'",
+  "UPDATE task_nodes SET state='COMPLETED' WHERE state='VERIFYING'",
+  "UPDATE task_nodes SET state='FAILED' WHERE state='VERIFYING'",
+  "UPDATE task_nodes SET state='PENDING' WHERE state='FAILED'",
+  "UPDATE task_nodes SET state='CANCELLED' WHERE state='FAILED'",
+];
+
 // ── Atomic state transition ──────────────────────────────────────────────────
 // Validates the transition, updates task_nodes, inserts an audit record.
 // Throws StateTransitionError on invalid transition.
