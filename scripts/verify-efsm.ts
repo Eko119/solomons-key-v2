@@ -107,8 +107,10 @@ function extractSqlTransitions(src: string): Transition[] {
 function main(): void {
   const root = resolve(__dirname, '..');
 
-  const tlaPath = resolve(root, 'formal_specs', 'efsm.tla');
-  const smPath  = resolve(root, 'src', 'efsm', 'state-machine.ts');
+  // VERIFY_TLA_PATH / VERIFY_SM_PATH may be set by the bootloader to point at
+  // staged files (*.staged.tla / *.staged.ts) before committing to production.
+  const tlaPath = process.env['VERIFY_TLA_PATH'] ?? resolve(root, 'formal_specs', 'efsm.tla');
+  const smPath  = process.env['VERIFY_SM_PATH']  ?? resolve(root, 'src', 'efsm', 'state-machine.ts');
 
   let tlaSrc: string;
   let smSrc: string;
