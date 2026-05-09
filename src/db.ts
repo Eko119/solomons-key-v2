@@ -168,17 +168,34 @@ export function lockAllSessions(): void {
   db.prepare('UPDATE sessions SET locked=1').run();
 }
 
+// ---------- Chat Sessions ----------
+export function getSessionId(chatId: number): string | undefined {
+  const row = db.prepare('SELECT session_id FROM chat_sessions WHERE chat_id = ?')
+    .get(chatId) as { session_id: string } | undefined;
+  return row?.session_id;
+}
+
+export function upsertSessionId(chatId: number, sessionId: string): void {
+  db.prepare(`
+    INSERT INTO chat_sessions (chat_id, session_id, updated_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(chat_id) DO UPDATE SET
+      session_id = excluded.session_id,
+      updated_at = excluded.updated_at
+  `).run(chatId, sessionId, Date.now());
+}
+
 // ---------- Conversations ----------
 export function saveConversationTurn(chatId: number, agentId: string, role: string, content: string, tokens = 0): void {
   db.prepare('INSERT INTO conversations (id, chat_id, agent_id, role, content, timestamp, tokens_used) VALUES (?, ?, ?, ?, ?, ?, ?)')
     .run(uuidv4(), chatId, agentId, role, content, Date.now(), tokens);
 }
 
-export function searchConversationHistory(keywords: string, agentId: string, dayWindow = 30, limit = 20): any[] {
+export function searchConversationHistory(keywords: string, agentId: string, chatId: number, dayWindow = 30, limit = 20): any[] {
   const since = Date.now() - dayWindow * 86400_000;
   const like = `%${keywords.replace(/[%_]/g, '')}%`;
-  return db.prepare('SELECT * FROM conversations WHERE agent_id=? AND timestamp>=? AND content LIKE ? ORDER BY timestamp DESC LIMIT ?')
-    .all(agentId, since, like, limit) as any[];
+  return db.prepare('SELECT * FROM conversations WHERE agent_id=? AND chat_id=? AND timestamp>=? AND content LIKE ? ORDER BY timestamp DESC LIMIT ?')
+    .all(agentId, chatId, since, like, limit) as any[];
 }
 
 // ---------- Memories ----------
