@@ -7,7 +7,7 @@ import {
 import { dispatch, listAvailableSpecialists } from './orchestrator';
 import { formatCostFooter } from './agent';
 import { scanForSecrets } from './exfiltration-guard';
-import { insertAuditLog, lockAllSessions } from './db';
+import { insertAuditLog, lockAllSessions, getSessionId, upsertSessionId } from './db';
 
 const TELEGRAM_MSG_CAP = 3800;
 const pendingPin: Map<number, { agentId: string }> = new Map();
@@ -116,9 +116,11 @@ async function handleMessage(bot: TelegramBot, chatId: number, text: string): Pr
       return;
     }
 
-    const outcome = await dispatch({ chatId, text });
+    const sessionId = getSessionId(chatId);
+    const outcome = await dispatch({ chatId, text, sessionId });
     let response = outcome.response || '[no response]';
     if (outcome.result) {
+      upsertSessionId(chatId, outcome.result.sessionId);
       response += formatCostFooter(outcome.result, config.costFooterMode);
     }
     await send(bot, chatId, response);

@@ -53,6 +53,7 @@ export async function retrieveContext(query: string, agentId: string, chatId: nu
   const conversation = searchConversationHistory(
     query.split(/\s+/).filter(Boolean).slice(0, 5).join(' '),
     agentId,
+    chatId,
     30,
     10,
   );
