@@ -1,3 +1,6 @@
+import { randomUUID } from 'node:crypto';
+import * as fs from 'fs';
+import * as path from 'path';
 import TelegramBot from 'node-telegram-bot-api';
 import { config } from './config';
 import {
@@ -56,6 +59,16 @@ export function startBot(): TelegramBot {
 
   bot.on('message', (msg) => {
     const chatId = msg.chat.id;
+
+    if (msg.document) {
+      if (!isAllowedChatId(chatId)) {
+        insertAuditLog(chatId, null, 'blocked_chat_id', 'document');
+        return;
+      }
+      enqueue(chatId, () => handleDocumentMessage(bot, chatId, msg));
+      return;
+    }
+
     const text = (msg.text || '').trim();
     if (!text) return;
 
@@ -158,5 +171,92 @@ async function handleCommand(bot: TelegramBot, chatId: number, text: string): Pr
       return;
     default:
       await send(bot, chatId, `Unknown command: ${cmd}. Try /help.`);
+  }
+}
+
+async function handleDocumentMessage(bot: TelegramBot, chatId: number, msg: TelegramBot.Message): Promise<void> {
+  let localPath = '';
+  try {
+    const auth = handleAuth(chatId, 'main', '');
+    if (!auth.allowed) {
+      if (auth.requirePin) pendingPin.set(chatId, { agentId: 'main' });
+      if (auth.message) await send(bot, chatId, auth.message);
+      return;
+    }
+
+    const rawFileName =
+      (msg.document!.file_name && msg.document!.file_name.trim())
+        ? msg.document!.file_name
+        : 'telegram_document';
+
+    const sanitizedBase = rawFileName.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const sanitizedFileName = /^[_.]+$/.test(sanitizedBase)
+      ? 'telegram_document'
+      : sanitizedBase;
+    const safeFileName = `${Date.now()}-${chatId}-${randomUUID()}-${sanitizedFileName}`;
+    localPath = path.join(config.projectRoot, 'store', 'tmp', safeFileName);
+
+    fs.mkdirSync(path.dirname(localPath), { recursive: true });
+    const downloadedPath = await bot.downloadFile(msg.document!.file_id, path.dirname(localPath));
+    await fs.promises.rename(downloadedPath, localPath);
+
+    const mimeType = msg.document!.mime_type || 'application/octet-stream';
+    const fileBuffer = await fs.promises.readFile(localPath);
+    const blob = new Blob([fileBuffer], { type: mimeType });
+    const form = new FormData();
+    form.append('file', blob, sanitizedFileName);
+
+    const uploadRes = await fetch('https://api.anthropic.com/v1/files', {
+      method: 'POST',
+      headers: {
+        'x-api-key': config.anthropicApiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-beta': 'files-api-2025-04-14',
+      },
+      body: form,
+    });
+
+    if (!uploadRes.ok) {
+      throw new Error(`Files API upload failed: ${uploadRes.status} ${uploadRes.statusText}`);
+    }
+
+    const uploadData = await uploadRes.json() as Record<string, unknown>;
+    if (
+      !uploadData ||
+      typeof uploadData.id !== 'string' ||
+      !uploadData.id.startsWith('file_')
+    ) {
+      throw new Error('Invalid Anthropic Files API response');
+    }
+    const anthropicFileId = uploadData.id;
+
+    const sessionId = getSessionId(chatId);
+    const outcome = await dispatch({
+      chatId,
+      text: msg.caption?.trim() || `Process the attached file: ${sanitizedFileName}`,
+      sessionId,
+      fileAttachment: {
+        anthropicFileId,
+        localPath,
+        fileName: sanitizedFileName,
+        mimeType,
+      },
+    });
+
+    let response = outcome.response || '[no response]';
+    if (outcome.result) {
+      upsertSessionId(chatId, outcome.result.sessionId);
+      response += formatCostFooter(outcome.result, config.costFooterMode);
+    }
+    await send(bot, chatId, response);
+
+  } catch (err: unknown) {
+    console.error(`[bot] document handler error: ${err instanceof Error ? err.message : String(err)}`);
+    insertAuditLog(chatId, null, 'handler_error', String(err instanceof Error ? err.message : String(err)).slice(0, 200));
+    try { await send(bot, chatId, 'Sorry, I could not process that attachment.'); } catch { /* noop */ }
+  } finally {
+    if (localPath) {
+      try { fs.unlinkSync(localPath); } catch { /* ignore — file may not exist if download failed */ }
+    }
   }
 }

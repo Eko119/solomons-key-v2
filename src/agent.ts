@@ -23,8 +23,14 @@ export interface QueryOptions {
   mcpConfig?:    McpServerEntry[];
   model?:        string;
   sessionId?:    string;
-  maxTurns?:     number;
-  onEnvelope?:   (env: AgentResponse) => void;
+  maxTurns?:       number;
+  onEnvelope?:     (env: AgentResponse) => void;
+  fileAttachment?: {
+    anthropicFileId: string;
+    localPath:       string;
+    fileName:        string;
+    mimeType:        string;
+  };
 }
 
 export interface AgentResult {
@@ -67,8 +73,9 @@ export async function runAgent(opts: QueryOptions): Promise<AgentResult> {
     cwd:          opts.cwd,
     sessionId:    effectiveSessionId,
     timeoutMs:    config.agentTimeoutMs,
-    onEnvelope:   opts.onEnvelope,
-    onStart:      (pid) => setAgentPid(opts.agentId, pid),
+    onEnvelope:    opts.onEnvelope,
+    onStart:       (pid) => setAgentPid(opts.agentId, pid),
+    fileAttachment: opts.fileAttachment,
   };
 
   const run = await runAgentEnvelope(req, runOpts);

@@ -12,3 +12,4 @@ outputs/meet_briefs/**/*.md
 /tmp/warroom-pin.json
 assets/icon.ico
 mcp-servers.json
+store/tmp/*

@@ -109,6 +109,12 @@ export interface DispatchOptions {
   chatId: number;
   text: string;
   sessionId?: string;
+  fileAttachment?: {
+    anthropicFileId: string;
+    localPath:       string;
+    fileName:        string;
+    mimeType:        string;
+  };
 }
 
 export interface DispatchOutcome {
@@ -172,6 +178,7 @@ async function runSingle(agentId: string, opts: DispatchOptions): Promise<Dispat
     sessionId: opts.sessionId,
     maxTurns: def.maxTurns,
     onEnvelope: (env) => logEnvelope(agentId, env),
+    fileAttachment: opts.fileAttachment,
   });
 
   const sanitized = sanitizeOutput(result.response);

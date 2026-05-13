@@ -32,8 +32,14 @@ export interface RunAgentOptions {
   cwd?:          string;
   sessionId?:    string;
   timeoutMs?:    number;
-  onEnvelope?:   (env: AgentResponse) => void;
-  onStart?:      (pid: number | null) => void;
+  onEnvelope?:     (env: AgentResponse) => void;
+  onStart?:        (pid: number | null) => void;
+  fileAttachment?: {
+    anthropicFileId: string;
+    localPath:       string;
+    fileName:        string;
+    mimeType:        string;
+  };
 }
 
 export interface AgentRunResult {
@@ -148,6 +154,16 @@ export async function runAgentEnvelope(req: AgentRequest, opts: RunAgentOptions)
     '--model', model,
   ];
   if (opts.sessionId) args.push('--resume', opts.sessionId);
+  if (opts.fileAttachment) {
+    const relativePath = path
+      .relative(config.projectRoot, opts.fileAttachment.localPath)
+      .split(path.sep)
+      .join(path.posix.sep);
+    args.push(
+      '--file',
+      `${opts.fileAttachment.anthropicFileId}:${relativePath}`,
+    );
+  }
   if (opts.systemPrompt) args.push('--append-system-prompt', opts.systemPrompt);
   if (opts.allowedTools?.length) args.push('--allowed-tools', opts.allowedTools.join(','));
 
