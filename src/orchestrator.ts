@@ -103,7 +103,7 @@ function logEnvelope(agentId: string, env: AgentResponse): void {
   }
 }
 
-const MENTION_RE = /@(\w+)/g;
+const MENTION_RE = /@([\w-]+)/g;
 
 export interface DispatchOptions {
   chatId: number;
