@@ -6,6 +6,7 @@ import {
   rawDb, listMissions, getActiveMissions, getAuditLog,
   getAllAgentActivity, getTotalUsage, getDailyCost, listScheduledTasks,
   getMemoriesByAgent,
+  getClient, getLatestAnalytics, getLeadStatusCounts, getOutreachCounts,
 } from './db';
 import { listAgents } from './agent-config';
 import { listAgentHealth } from './agent-pool';
@@ -91,6 +92,41 @@ export function buildApp(): Hono {
     const limit = parseInt(c.req.query('limit') || '50', 10);
     const rows = getMemoriesByAgent(agentId, isNaN(limit) ? 50 : limit);
     return c.json({ rows });
+  });
+
+  app.get('/api/marketing/clients/:clientId/summary', c => {
+    const clientId = c.req.param('clientId');
+    const client = getClient(clientId);
+    if (!client) return c.json({ error: 'not_found' }, 404);
+
+    const byStatus = getLeadStatusCounts(clientId);
+    const total = Object.values(byStatus).reduce((a, b) => a + b, 0);
+    const o = getOutreachCounts(clientId);
+    const replyRate = o.sent === 0 ? 0 : Math.round((o.replied / o.sent) * 10000) / 10000;
+    const conversionRate = o.sent === 0 ? 0 : Math.round((o.converted / o.sent) * 10000) / 10000;
+
+    const a = getLatestAnalytics(clientId);
+    return c.json({
+      client: {
+        id: client.id,
+        name: client.name,
+        industry: client.industry,
+        targetPlatform: client.targetPlatform,
+      },
+      leads: { total, byStatus },
+      outreach: {
+        sent: o.sent,
+        replied: o.replied,
+        converted: o.converted,
+        replyRate,
+        conversionRate,
+      },
+      latestAnalytics: a ? {
+        periodStart: a.periodStart,
+        periodEnd: a.periodEnd,
+        topPerformingHook: a.topPerformingHook,
+      } : null,
+    });
   });
 
   return app;

@@ -706,3 +706,28 @@ export function getLatestAnalytics(clientId: string): {
     topPerformingHook: row.top_performing_hook,
   };
 }
+
+export function getLeadStatusCounts(clientId: string): Record<string, number> {
+  const rows = db.prepare(
+    'SELECT status, COUNT(*) as count FROM leads WHERE client_id=? GROUP BY status'
+  ).all(clientId) as { status: string; count: number }[];
+  const out: Record<string, number> = {};
+  for (const r of rows) out[r.status] = r.count;
+  return out;
+}
+
+export function getOutreachCounts(clientId: string): { sent: number; replied: number; converted: number } {
+  const row = db.prepare(
+    `SELECT
+       SUM(CASE WHEN sent_at IS NOT NULL THEN 1 ELSE 0 END) AS sent,
+       SUM(CASE WHEN reply_received_at IS NOT NULL THEN 1 ELSE 0 END) AS replied,
+       SUM(CASE WHEN outcome = 'converted' THEN 1 ELSE 0 END) AS converted
+     FROM outreach_events
+     WHERE client_id=?`
+  ).get(clientId) as { sent: number | null; replied: number | null; converted: number | null };
+  return {
+    sent: row.sent ?? 0,
+    replied: row.replied ?? 0,
+    converted: row.converted ?? 0,
+  };
+}
