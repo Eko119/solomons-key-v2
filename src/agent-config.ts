@@ -37,7 +37,8 @@ export interface AgentDefinition {
   dir: string;
 }
 
-export const AGENT_IDS = ['main', 'comms', 'content', 'ops', 'research'] as const;
+export const AGENT_IDS = ['main', 'comms', 'content', 'ops', 'research',
+  'intelligence', 'prospector', 'outreach', 'content-scheduler', 'analyst'] as const;
 export type AgentId = typeof AGENT_IDS[number];
 
 let registry: Record<string, AgentDefinition> | null = null;

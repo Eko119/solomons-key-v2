@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
+import crypto from 'node:crypto';
 import { v4 as uuidv4 } from 'uuid';
 import { config } from './config';
 
@@ -461,3 +462,272 @@ export function listMeetSessions(limit = 50): any[] {
 }
 
 export function rawDb(): any { return db; }
+
+// ── Marketing helpers (MKTG-2) ──────────────────────────────────────────────
+
+const TARGET_PLATFORMS = ['instagram', 'twitter', 'linkedin', 'tiktok'] as const;
+type TargetPlatform = typeof TARGET_PLATFORMS[number];
+
+const LEAD_STATUSES = ['unprocessed','enriched','queued','sent','replied','converted','disqualified'] as const;
+type LeadStatus = typeof LEAD_STATUSES[number];
+
+const OUTREACH_REPLY_OUTCOMES = ['replied','converted','bounced'] as const;
+type OutreachReplyOutcome = typeof OUTREACH_REPLY_OUTCOMES[number];
+
+export function createClient(params: {
+  name: string;
+  industry: string;
+  targetPlatform: TargetPlatform;
+  brandVoice: string;
+}): string {
+  if (!TARGET_PLATFORMS.includes(params.targetPlatform)) {
+    throw new Error(`invalid targetPlatform: ${params.targetPlatform}`);
+  }
+  const id = uuidv4();
+  const now = Date.now();
+  db.prepare(
+    'INSERT INTO clients (id, name, industry, target_platform, brand_voice, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  ).run(id, params.name, params.industry, params.targetPlatform, params.brandVoice, now, now);
+  return id;
+}
+
+export function getClient(clientId: string): {
+  id: string;
+  name: string;
+  industry: string;
+  targetPlatform: string;
+  brandVoice: string;
+  createdAt: number;
+  updatedAt: number;
+} | null {
+  const row = db.prepare('SELECT * FROM clients WHERE id=?').get(clientId) as
+    { id: string; name: string; industry: string; target_platform: string; brand_voice: string; created_at: number; updated_at: number } | undefined;
+  if (!row) return null;
+  return {
+    id: row.id,
+    name: row.name,
+    industry: row.industry,
+    targetPlatform: row.target_platform,
+    brandVoice: row.brand_voice,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export function upsertLead(params: {
+  clientId: string;
+  platform: string;
+  profileUrl: string;
+  displayName?: string;
+  bio?: string;
+  followerCount?: number;
+  recentPosts?: string[];
+}): { id: number; isNew: boolean } {
+  const contentHash = crypto.createHash('sha256').update(params.profileUrl).digest('hex');
+  const existing = db.prepare('SELECT id FROM leads WHERE content_hash=?').get(contentHash) as { id: number } | undefined;
+  if (existing) return { id: existing.id, isNew: false };
+
+  const info = db.prepare(
+    `INSERT INTO leads (client_id, platform, profile_url, display_name, bio, follower_count, recent_posts, content_hash, status, scraped_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'unprocessed', ?)`
+  ).run(
+    params.clientId,
+    params.platform,
+    params.profileUrl,
+    params.displayName ?? null,
+    params.bio ?? null,
+    params.followerCount ?? null,
+    params.recentPosts ? JSON.stringify(params.recentPosts) : null,
+    contentHash,
+    Date.now(),
+  );
+  return { id: Number(info.lastInsertRowid), isNew: true };
+}
+
+export function updateLeadStatus(leadId: number, status: LeadStatus): void {
+  if (!LEAD_STATUSES.includes(status)) {
+    throw new Error(`invalid lead status: ${status}`);
+  }
+  db.prepare('UPDATE leads SET status=? WHERE id=?').run(status, leadId);
+}
+
+export function getLeadsByStatus(clientId: string, status: LeadStatus): {
+  id: number;
+  profileUrl: string;
+  displayName: string | null;
+  recentPosts: string[];
+}[] {
+  if (!LEAD_STATUSES.includes(status)) {
+    throw new Error(`invalid lead status: ${status}`);
+  }
+  const rows = db.prepare(
+    'SELECT id, profile_url, display_name, recent_posts FROM leads WHERE client_id=? AND status=? ORDER BY scraped_at DESC'
+  ).all(clientId, status) as { id: number; profile_url: string; display_name: string | null; recent_posts: string | null }[];
+
+  return rows.map(r => {
+    let parsed: string[] = [];
+    if (r.recent_posts) {
+      try {
+        const v = JSON.parse(r.recent_posts);
+        if (Array.isArray(v) && v.every((x: unknown) => typeof x === 'string')) {
+          parsed = v as string[];
+        } else {
+          console.warn(`[db] lead ${r.id} recent_posts not string[] — using []`);
+        }
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`[db] lead ${r.id} recent_posts JSON parse failed: ${msg}`);
+      }
+    }
+    return {
+      id: r.id,
+      profileUrl: r.profile_url,
+      displayName: r.display_name,
+      recentPosts: parsed,
+    };
+  });
+}
+
+export function createOutreachEvent(params: {
+  clientId: string;
+  leadId: number;
+  draftText: string;
+}): number {
+  const info = db.prepare(
+    'INSERT INTO outreach_events (client_id, lead_id, draft_text, queued_at) VALUES (?, ?, ?, ?)'
+  ).run(params.clientId, params.leadId, params.draftText, Date.now());
+  return Number(info.lastInsertRowid);
+}
+
+export function recordOutreachSent(eventId: number): void {
+  db.prepare('UPDATE outreach_events SET sent_at=? WHERE id=?').run(Date.now(), eventId);
+}
+
+export function recordOutreachReply(params: {
+  eventId: number;
+  replyText: string;
+  outcome: OutreachReplyOutcome;
+}): void {
+  if (!OUTREACH_REPLY_OUTCOMES.includes(params.outcome)) {
+    throw new Error(`invalid outreach outcome: ${params.outcome}`);
+  }
+  db.prepare(
+    'UPDATE outreach_events SET reply_received_at=?, reply_text=?, outcome=? WHERE id=?'
+  ).run(Date.now(), params.replyText, params.outcome, params.eventId);
+}
+
+export function schedulePost(params: {
+  clientId: string;
+  platform: string;
+  postText: string;
+  scheduledFor: number;
+}): number {
+  const info = db.prepare(
+    'INSERT INTO content_calendar (client_id, platform, post_text, scheduled_for) VALUES (?, ?, ?, ?)'
+  ).run(params.clientId, params.platform, params.postText, params.scheduledFor);
+  return Number(info.lastInsertRowid);
+}
+
+export function getScheduledPosts(clientId: string, fromTs: number, toTs: number): {
+  id: number;
+  platform: string;
+  postText: string;
+  scheduledFor: number;
+}[] {
+  const rows = db.prepare(
+    "SELECT id, platform, post_text, scheduled_for FROM content_calendar WHERE client_id=? AND scheduled_for BETWEEN ? AND ? AND status='scheduled' ORDER BY scheduled_for ASC"
+  ).all(clientId, fromTs, toTs) as { id: number; platform: string; post_text: string; scheduled_for: number }[];
+  return rows.map(r => ({
+    id: r.id,
+    platform: r.platform,
+    postText: r.post_text,
+    scheduledFor: r.scheduled_for,
+  }));
+}
+
+export function markPostPosted(postId: number): void {
+  db.prepare("UPDATE content_calendar SET status='posted', posted_at=? WHERE id=?").run(Date.now(), postId);
+}
+
+export function markPostFailed(postId: number): void {
+  db.prepare("UPDATE content_calendar SET status='failed' WHERE id=?").run(postId);
+}
+
+export function writeAnalyticsSnapshot(params: {
+  clientId: string;
+  periodStart: number;
+  periodEnd: number;
+  leadsScraped: number;
+  dmsSent: number;
+  repliesReceived: number;
+  conversions: number;
+  topPerformingHook?: string;
+}): void {
+  db.prepare(
+    `INSERT INTO marketing_analytics
+     (client_id, period_start, period_end, leads_scraped, dms_sent, replies_received, conversions, top_performing_hook, computed_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    params.clientId,
+    params.periodStart,
+    params.periodEnd,
+    params.leadsScraped,
+    params.dmsSent,
+    params.repliesReceived,
+    params.conversions,
+    params.topPerformingHook ?? null,
+    Date.now(),
+  );
+}
+
+export function getLatestAnalytics(clientId: string): {
+  periodStart: number;
+  periodEnd: number;
+  leadsScraped: number;
+  dmsSent: number;
+  repliesReceived: number;
+  conversions: number;
+  topPerformingHook: string | null;
+} | null {
+  const row = db.prepare(
+    'SELECT period_start, period_end, leads_scraped, dms_sent, replies_received, conversions, top_performing_hook FROM marketing_analytics WHERE client_id=? ORDER BY computed_at DESC LIMIT 1'
+  ).get(clientId) as {
+    period_start: number; period_end: number; leads_scraped: number; dms_sent: number;
+    replies_received: number; conversions: number; top_performing_hook: string | null;
+  } | undefined;
+  if (!row) return null;
+  return {
+    periodStart: row.period_start,
+    periodEnd: row.period_end,
+    leadsScraped: row.leads_scraped,
+    dmsSent: row.dms_sent,
+    repliesReceived: row.replies_received,
+    conversions: row.conversions,
+    topPerformingHook: row.top_performing_hook,
+  };
+}
+
+export function getLeadStatusCounts(clientId: string): Record<string, number> {
+  const rows = db.prepare(
+    'SELECT status, COUNT(*) as count FROM leads WHERE client_id=? GROUP BY status'
+  ).all(clientId) as { status: string; count: number }[];
+  const out: Record<string, number> = {};
+  for (const r of rows) out[r.status] = r.count;
+  return out;
+}
+
+export function getOutreachCounts(clientId: string): { sent: number; replied: number; converted: number } {
+  const row = db.prepare(
+    `SELECT
+       SUM(CASE WHEN sent_at IS NOT NULL THEN 1 ELSE 0 END) AS sent,
+       SUM(CASE WHEN reply_received_at IS NOT NULL THEN 1 ELSE 0 END) AS replied,
+       SUM(CASE WHEN outcome = 'converted' THEN 1 ELSE 0 END) AS converted
+     FROM outreach_events
+     WHERE client_id=?`
+  ).get(clientId) as { sent: number | null; replied: number | null; converted: number | null };
+  return {
+    sent: row.sent ?? 0,
+    replied: row.replied ?? 0,
+    converted: row.converted ?? 0,
+  };
+}

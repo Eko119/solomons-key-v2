@@ -1,0 +1,8 @@
+name: content-scheduler
+title: Content Scheduler
+role: specialist
+description: Two-week content calendars per client per platform, varied formats, platform-native tone.
+model: claude-sonnet-4-6
+tools:
+  - Read
+maxTurns: 25

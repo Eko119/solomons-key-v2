@@ -1,0 +1,8 @@
+name: analyst
+title: Marketing Analyst
+role: specialist
+description: Weekly plain-English marketing reports — top hooks, reply rates, content performance, one recommendation.
+model: claude-sonnet-4-6
+tools:
+  - Read
+maxTurns: 25

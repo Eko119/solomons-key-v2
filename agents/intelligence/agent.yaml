@@ -1,0 +1,10 @@
+name: intelligence
+title: Marketing Intelligence Specialist
+role: specialist
+description: ICP definition, platform targeting, and prioritised scraping target lists.
+model: claude-sonnet-4-6
+tools:
+  - Read
+  - WebFetch
+  - WebSearch
+maxTurns: 25
