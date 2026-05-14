@@ -1047,3 +1047,44 @@ export function getEnrichedLeads(clientId: string): EnrichedLead[] {
     };
   });
 }
+
+// ── getAllClients + updateClient (P5-T1) ─────────────────────────────────────
+
+export function getAllClients(): {
+  id: string;
+  name: string;
+  industry: string;
+  targetPlatform: string;
+}[] {
+  const rows = db.prepare(
+    'SELECT id, name, industry, target_platform FROM clients ORDER BY created_at DESC'
+  ).all() as { id: string; name: string; industry: string; target_platform: string }[];
+  return rows.map(r => ({
+    id: r.id,
+    name: r.name,
+    industry: r.industry,
+    targetPlatform: r.target_platform,
+  }));
+}
+
+export function updateClient(clientId: string, params: {
+  name?: string;
+  industry?: string;
+  targetPlatform?: TargetPlatform;
+  brandVoice?: string;
+}): void {
+  if (params.targetPlatform !== undefined && !TARGET_PLATFORMS.includes(params.targetPlatform)) {
+    throw new SolomonError(`invalid targetPlatform: ${params.targetPlatform}`, 'INVALID_TARGET_PLATFORM');
+  }
+  const sets: string[] = [];
+  const vals: (string | number)[] = [];
+  if (params.name !== undefined)           { sets.push('name=?');            vals.push(params.name); }
+  if (params.industry !== undefined)       { sets.push('industry=?');        vals.push(params.industry); }
+  if (params.targetPlatform !== undefined) { sets.push('target_platform=?'); vals.push(params.targetPlatform); }
+  if (params.brandVoice !== undefined)     { sets.push('brand_voice=?');     vals.push(params.brandVoice); }
+  if (sets.length === 0) return;
+  sets.push('updated_at=?');
+  vals.push(Date.now());
+  vals.push(clientId);
+  db.prepare(`UPDATE clients SET ${sets.join(', ')} WHERE id=?`).run(...vals);
+}
