@@ -731,3 +731,194 @@ export function getOutreachCounts(clientId: string): { sent: number; replied: nu
     converted: row.converted ?? 0,
   };
 }
+
+// ── SolomonError + scrape_jobs helpers (P1-T2) ───────────────────────────────
+
+export class SolomonError extends Error {
+  code: string;
+  constructor(message: string, code: string) {
+    super(message);
+    this.name = 'SolomonError';
+    this.code = code;
+  }
+}
+
+const SCRAPE_STATUSES = ['pending', 'running', 'completed', 'failed'] as const;
+export type ScrapeStatus = typeof SCRAPE_STATUSES[number];
+
+export interface ScrapeJob {
+  id: number;
+  clientId: string;
+  platform: string;
+  searchTargets: string[];
+  maxLeads: number;
+  status: ScrapeStatus;
+  startedAt: number | null;
+  completedAt: number | null;
+  leadsFound: number;
+  error: string | null;
+  createdAt: number;
+}
+
+export interface PendingScrapeJob {
+  id: number;
+  clientId: string;
+  platform: string;
+  searchTargets: string[];
+  maxLeads: number;
+}
+
+export interface ScrapeJobSummary {
+  id: number;
+  platform: string;
+  status: ScrapeStatus;
+  leadsFound: number;
+  createdAt: number;
+}
+
+export function createScrapeJob(params: {
+  clientId: string;
+  platform: string;
+  searchTargets: string[];
+  maxLeads?: number;
+}): number {
+  if (!Array.isArray(params.searchTargets)) {
+    throw new SolomonError('searchTargets must be a string array', 'INVALID_SEARCH_TARGETS');
+  }
+  const day = new Date().toISOString().slice(0, 10);
+  const idempotencyKey = `${params.clientId}:${params.platform}:${day}`;
+  try {
+    const info = db.prepare(
+      `INSERT INTO scrape_jobs (client_id, platform, search_targets, max_leads, created_at, idempotency_key)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    ).run(
+      params.clientId,
+      params.platform,
+      JSON.stringify(params.searchTargets),
+      params.maxLeads ?? 50,
+      Date.now(),
+      idempotencyKey
+    );
+    return Number(info.lastInsertRowid);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes('UNIQUE')) {
+      throw new SolomonError(
+        `duplicate scrape job for ${idempotencyKey}`,
+        'DUPLICATE_SCRAPE_JOB'
+      );
+    }
+    throw err;
+  }
+}
+
+export function getScrapeJob(jobId: number): ScrapeJob | null {
+  const row = db.prepare(
+    `SELECT id, client_id, platform, search_targets, max_leads, status,
+            started_at, completed_at, leads_found, error, created_at
+     FROM scrape_jobs WHERE id=?`
+  ).get(jobId) as {
+    id: number;
+    client_id: string;
+    platform: string;
+    search_targets: string;
+    max_leads: number;
+    status: ScrapeStatus;
+    started_at: number | null;
+    completed_at: number | null;
+    leads_found: number;
+    error: string | null;
+    created_at: number;
+  } | undefined;
+  if (!row) return null;
+  let searchTargets: string[];
+  try {
+    const parsed = JSON.parse(row.search_targets);
+    if (!Array.isArray(parsed)) throw new Error('not an array');
+    searchTargets = parsed;
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new SolomonError(
+      `scrape_job ${jobId} search_targets parse failed: ${msg}`,
+      'INVALID_SEARCH_TARGETS'
+    );
+  }
+  return {
+    id: row.id,
+    clientId: row.client_id,
+    platform: row.platform,
+    searchTargets,
+    maxLeads: row.max_leads,
+    status: row.status,
+    startedAt: row.started_at,
+    completedAt: row.completed_at,
+    leadsFound: row.leads_found,
+    error: row.error,
+    createdAt: row.created_at,
+  };
+}
+
+export function listScrapeJobs(clientId: string): ScrapeJobSummary[] {
+  const rows = db.prepare(
+    `SELECT id, platform, status, leads_found, created_at
+     FROM scrape_jobs WHERE client_id=? ORDER BY created_at DESC`
+  ).all(clientId) as {
+    id: number;
+    platform: string;
+    status: ScrapeStatus;
+    leads_found: number;
+    created_at: number;
+  }[];
+  return rows.map(r => ({
+    id: r.id,
+    platform: r.platform,
+    status: r.status,
+    leadsFound: r.leads_found,
+    createdAt: r.created_at,
+  }));
+}
+
+export function startScrapeJob(jobId: number): void {
+  db.prepare('UPDATE scrape_jobs SET status=?, started_at=? WHERE id=?')
+    .run('running', Date.now(), jobId);
+}
+
+export function completeScrapeJob(jobId: number, leadsFound: number): void {
+  db.prepare('UPDATE scrape_jobs SET status=?, completed_at=?, leads_found=? WHERE id=?')
+    .run('completed', Date.now(), leadsFound, jobId);
+}
+
+export function failScrapeJob(jobId: number, error: string): void {
+  db.prepare('UPDATE scrape_jobs SET status=?, completed_at=?, error=? WHERE id=?')
+    .run('failed', Date.now(), error, jobId);
+}
+
+export function getPendingScrapeJobs(): PendingScrapeJob[] {
+  const rows = db.prepare(
+    `SELECT id, client_id, platform, search_targets, max_leads
+     FROM scrape_jobs WHERE status='pending' ORDER BY created_at ASC`
+  ).all() as {
+    id: number;
+    client_id: string;
+    platform: string;
+    search_targets: string;
+    max_leads: number;
+  }[];
+  return rows.map(r => {
+    let searchTargets: string[] = [];
+    try {
+      const parsed = JSON.parse(r.search_targets);
+      if (Array.isArray(parsed)) searchTargets = parsed;
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[db] scrape_job ${r.id} search_targets parse failed: ${msg}`);
+    }
+    return {
+      id: r.id,
+      clientId: r.client_id,
+      platform: r.platform,
+      searchTargets,
+      maxLeads: r.max_leads,
+    };
+  });
+}
