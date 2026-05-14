@@ -219,3 +219,19 @@ async function runFanOut(agentIds: string[], opts: DispatchOptions): Promise<Dis
 export function listAvailableSpecialists(): string {
   return listSpecialists().map(a => `@${a.id} — ${a.description}`).join('\n');
 }
+
+export async function dispatchToAgent(agentId: string, prompt: string): Promise<string> {
+  const def = getAgent(agentId);
+  const mcpConfig = getMcpConfigForAgent(agentId);
+  const result = await runAgent({
+    agentId,
+    chatId: 0,
+    prompt,
+    systemPrompt: def.systemPrompt,
+    allowedTools: def.tools,
+    mcpConfig: mcpConfig.length ? mcpConfig : undefined,
+    model: def.model,
+    maxTurns: def.maxTurns,
+  });
+  return sanitizeOutput(result.response);
+}
