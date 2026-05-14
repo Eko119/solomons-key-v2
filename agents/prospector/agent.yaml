@@ -1,0 +1,10 @@
+name: prospector
+title: Marketing Prospector
+role: specialist
+description: Lead discovery execution against a scraping brief — structured lead records, no fabrication.
+model: claude-sonnet-4-6
+tools:
+  - Read
+  - WebFetch
+  - WebSearch
+maxTurns: 25
