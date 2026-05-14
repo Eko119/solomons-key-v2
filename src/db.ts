@@ -922,3 +922,128 @@ export function getPendingScrapeJobs(): PendingScrapeJob[] {
     };
   });
 }
+
+// ── outreach_queue helpers + getEnrichedLeads (P2-T2) ────────────────────────
+
+const OUTREACH_QUEUE_STATUSES = ['pending', 'approved', 'sent', 'rejected'] as const;
+export type OutreachQueueStatus = typeof OUTREACH_QUEUE_STATUSES[number];
+
+export interface OutreachQueueRow {
+  id: number;
+  clientId: string;
+  leadId: number;
+  draftMessage: string;
+  status: OutreachQueueStatus;
+  approvedAt: number | null;
+  sentAt: number | null;
+  rejectedAt: number | null;
+  rejectionNote: string | null;
+  createdAt: number;
+}
+
+export interface EnrichedLead {
+  id: number;
+  platform: string;
+  profileUrl: string;
+  displayName: string | null;
+  bio: string | null;
+  recentPosts: string[];
+}
+
+export function enqueueOutreach(params: {
+  clientId: string;
+  leadId: number;
+  draftMessage: string;
+}): number {
+  const info = db.prepare(
+    `INSERT INTO outreach_queue (client_id, lead_id, draft_message, created_at)
+     VALUES (?, ?, ?, ?)`
+  ).run(params.clientId, params.leadId, params.draftMessage, Date.now());
+  return Number(info.lastInsertRowid);
+}
+
+export function listOutreachQueue(
+  clientId: string,
+  status?: OutreachQueueStatus
+): OutreachQueueRow[] {
+  if (status !== undefined && !OUTREACH_QUEUE_STATUSES.includes(status)) {
+    throw new SolomonError(`invalid outreach queue status: ${status}`, 'INVALID_OUTREACH_STATUS');
+  }
+  const rows = status
+    ? db.prepare(
+        `SELECT id, client_id, lead_id, draft_message, status, approved_at, sent_at,
+                rejected_at, rejection_note, created_at
+         FROM outreach_queue WHERE client_id=? AND status=? ORDER BY created_at DESC`
+      ).all(clientId, status) as any[]
+    : db.prepare(
+        `SELECT id, client_id, lead_id, draft_message, status, approved_at, sent_at,
+                rejected_at, rejection_note, created_at
+         FROM outreach_queue WHERE client_id=? ORDER BY created_at DESC`
+      ).all(clientId) as any[];
+  return rows.map(r => ({
+    id: r.id,
+    clientId: r.client_id,
+    leadId: r.lead_id,
+    draftMessage: r.draft_message,
+    status: r.status,
+    approvedAt: r.approved_at,
+    sentAt: r.sent_at,
+    rejectedAt: r.rejected_at,
+    rejectionNote: r.rejection_note,
+    createdAt: r.created_at,
+  }));
+}
+
+export function approveOutreach(queueId: number): void {
+  db.prepare('UPDATE outreach_queue SET status=?, approved_at=? WHERE id=?')
+    .run('approved', Date.now(), queueId);
+}
+
+export function rejectOutreach(queueId: number, note: string): void {
+  db.prepare('UPDATE outreach_queue SET status=?, rejected_at=?, rejection_note=? WHERE id=?')
+    .run('rejected', Date.now(), note, queueId);
+}
+
+export function markOutreachSent(queueId: number): void {
+  db.prepare('UPDATE outreach_queue SET status=?, sent_at=? WHERE id=?')
+    .run('sent', Date.now(), queueId);
+}
+
+export function getPendingOutreach(clientId: string): OutreachQueueRow[] {
+  return listOutreachQueue(clientId, 'pending');
+}
+
+export function getEnrichedLeads(clientId: string): EnrichedLead[] {
+  const rows = db.prepare(
+    `SELECT id, platform, profile_url, display_name, bio, recent_posts
+     FROM leads
+     WHERE client_id=? AND status='enriched'
+     ORDER BY enriched_at DESC, scraped_at DESC`
+  ).all(clientId) as {
+    id: number;
+    platform: string;
+    profile_url: string;
+    display_name: string | null;
+    bio: string | null;
+    recent_posts: string | null;
+  }[];
+  return rows.map(r => {
+    let recentPosts: string[] = [];
+    if (r.recent_posts) {
+      try {
+        const parsed = JSON.parse(r.recent_posts);
+        if (Array.isArray(parsed)) recentPosts = parsed;
+      } catch {
+        recentPosts = [];
+      }
+    }
+    return {
+      id: r.id,
+      platform: r.platform,
+      profileUrl: r.profile_url,
+      displayName: r.display_name,
+      bio: r.bio,
+      recentPosts,
+    };
+  });
+}
