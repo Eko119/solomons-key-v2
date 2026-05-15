@@ -731,3 +731,360 @@ export function getOutreachCounts(clientId: string): { sent: number; replied: nu
     converted: row.converted ?? 0,
   };
 }
+
+// ── SolomonError + scrape_jobs helpers (P1-T2) ───────────────────────────────
+
+export class SolomonError extends Error {
+  code: string;
+  constructor(message: string, code: string) {
+    super(message);
+    this.name = 'SolomonError';
+    this.code = code;
+  }
+}
+
+const SCRAPE_STATUSES = ['pending', 'running', 'completed', 'failed'] as const;
+export type ScrapeStatus = typeof SCRAPE_STATUSES[number];
+
+export interface ScrapeJob {
+  id: number;
+  clientId: string;
+  platform: string;
+  searchTargets: string[];
+  maxLeads: number;
+  status: ScrapeStatus;
+  startedAt: number | null;
+  completedAt: number | null;
+  leadsFound: number;
+  error: string | null;
+  createdAt: number;
+}
+
+export interface PendingScrapeJob {
+  id: number;
+  clientId: string;
+  platform: string;
+  searchTargets: string[];
+  maxLeads: number;
+}
+
+export interface ScrapeJobSummary {
+  id: number;
+  platform: string;
+  status: ScrapeStatus;
+  leadsFound: number;
+  createdAt: number;
+}
+
+export function createScrapeJob(params: {
+  clientId: string;
+  platform: string;
+  searchTargets: string[];
+  maxLeads?: number;
+}): number {
+  if (!Array.isArray(params.searchTargets)) {
+    throw new SolomonError('searchTargets must be a string array', 'INVALID_SEARCH_TARGETS');
+  }
+  const day = new Date().toISOString().slice(0, 10);
+  const idempotencyKey = `${params.clientId}:${params.platform}:${day}`;
+  try {
+    const info = db.prepare(
+      `INSERT INTO scrape_jobs (client_id, platform, search_targets, max_leads, created_at, idempotency_key)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    ).run(
+      params.clientId,
+      params.platform,
+      JSON.stringify(params.searchTargets),
+      params.maxLeads ?? 50,
+      Date.now(),
+      idempotencyKey
+    );
+    return Number(info.lastInsertRowid);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes('UNIQUE')) {
+      throw new SolomonError(
+        `duplicate scrape job for ${idempotencyKey}`,
+        'DUPLICATE_SCRAPE_JOB'
+      );
+    }
+    throw err;
+  }
+}
+
+export function getScrapeJob(jobId: number): ScrapeJob | null {
+  const row = db.prepare(
+    `SELECT id, client_id, platform, search_targets, max_leads, status,
+            started_at, completed_at, leads_found, error, created_at
+     FROM scrape_jobs WHERE id=?`
+  ).get(jobId) as {
+    id: number;
+    client_id: string;
+    platform: string;
+    search_targets: string;
+    max_leads: number;
+    status: ScrapeStatus;
+    started_at: number | null;
+    completed_at: number | null;
+    leads_found: number;
+    error: string | null;
+    created_at: number;
+  } | undefined;
+  if (!row) return null;
+  let searchTargets: string[];
+  try {
+    const parsed = JSON.parse(row.search_targets);
+    if (!Array.isArray(parsed)) throw new Error('not an array');
+    searchTargets = parsed;
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new SolomonError(
+      `scrape_job ${jobId} search_targets parse failed: ${msg}`,
+      'INVALID_SEARCH_TARGETS'
+    );
+  }
+  return {
+    id: row.id,
+    clientId: row.client_id,
+    platform: row.platform,
+    searchTargets,
+    maxLeads: row.max_leads,
+    status: row.status,
+    startedAt: row.started_at,
+    completedAt: row.completed_at,
+    leadsFound: row.leads_found,
+    error: row.error,
+    createdAt: row.created_at,
+  };
+}
+
+export function listScrapeJobs(clientId: string): ScrapeJobSummary[] {
+  const rows = db.prepare(
+    `SELECT id, platform, status, leads_found, created_at
+     FROM scrape_jobs WHERE client_id=? ORDER BY created_at DESC`
+  ).all(clientId) as {
+    id: number;
+    platform: string;
+    status: ScrapeStatus;
+    leads_found: number;
+    created_at: number;
+  }[];
+  return rows.map(r => ({
+    id: r.id,
+    platform: r.platform,
+    status: r.status,
+    leadsFound: r.leads_found,
+    createdAt: r.created_at,
+  }));
+}
+
+export function startScrapeJob(jobId: number): void {
+  db.prepare('UPDATE scrape_jobs SET status=?, started_at=? WHERE id=?')
+    .run('running', Date.now(), jobId);
+}
+
+export function completeScrapeJob(jobId: number, leadsFound: number): void {
+  db.prepare('UPDATE scrape_jobs SET status=?, completed_at=?, leads_found=? WHERE id=?')
+    .run('completed', Date.now(), leadsFound, jobId);
+}
+
+export function failScrapeJob(jobId: number, error: string): void {
+  db.prepare('UPDATE scrape_jobs SET status=?, completed_at=?, error=? WHERE id=?')
+    .run('failed', Date.now(), error, jobId);
+}
+
+export function getPendingScrapeJobs(): PendingScrapeJob[] {
+  const rows = db.prepare(
+    `SELECT id, client_id, platform, search_targets, max_leads
+     FROM scrape_jobs WHERE status='pending' ORDER BY created_at ASC`
+  ).all() as {
+    id: number;
+    client_id: string;
+    platform: string;
+    search_targets: string;
+    max_leads: number;
+  }[];
+  return rows.map(r => {
+    let searchTargets: string[] = [];
+    try {
+      const parsed = JSON.parse(r.search_targets);
+      if (Array.isArray(parsed)) searchTargets = parsed;
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[db] scrape_job ${r.id} search_targets parse failed: ${msg}`);
+    }
+    return {
+      id: r.id,
+      clientId: r.client_id,
+      platform: r.platform,
+      searchTargets,
+      maxLeads: r.max_leads,
+    };
+  });
+}
+
+// ── outreach_queue helpers + getEnrichedLeads (P2-T2) ────────────────────────
+
+const OUTREACH_QUEUE_STATUSES = ['pending', 'approved', 'sent', 'rejected'] as const;
+export type OutreachQueueStatus = typeof OUTREACH_QUEUE_STATUSES[number];
+
+export interface OutreachQueueRow {
+  id: number;
+  clientId: string;
+  leadId: number;
+  draftMessage: string;
+  status: OutreachQueueStatus;
+  approvedAt: number | null;
+  sentAt: number | null;
+  rejectedAt: number | null;
+  rejectionNote: string | null;
+  createdAt: number;
+}
+
+export interface EnrichedLead {
+  id: number;
+  platform: string;
+  profileUrl: string;
+  displayName: string | null;
+  bio: string | null;
+  recentPosts: string[];
+}
+
+export function enqueueOutreach(params: {
+  clientId: string;
+  leadId: number;
+  draftMessage: string;
+}): number {
+  const info = db.prepare(
+    `INSERT INTO outreach_queue (client_id, lead_id, draft_message, created_at)
+     VALUES (?, ?, ?, ?)`
+  ).run(params.clientId, params.leadId, params.draftMessage, Date.now());
+  return Number(info.lastInsertRowid);
+}
+
+export function listOutreachQueue(
+  clientId: string,
+  status?: OutreachQueueStatus
+): OutreachQueueRow[] {
+  if (status !== undefined && !OUTREACH_QUEUE_STATUSES.includes(status)) {
+    throw new SolomonError(`invalid outreach queue status: ${status}`, 'INVALID_OUTREACH_STATUS');
+  }
+  const rows = status
+    ? db.prepare(
+        `SELECT id, client_id, lead_id, draft_message, status, approved_at, sent_at,
+                rejected_at, rejection_note, created_at
+         FROM outreach_queue WHERE client_id=? AND status=? ORDER BY created_at DESC`
+      ).all(clientId, status) as any[]
+    : db.prepare(
+        `SELECT id, client_id, lead_id, draft_message, status, approved_at, sent_at,
+                rejected_at, rejection_note, created_at
+         FROM outreach_queue WHERE client_id=? ORDER BY created_at DESC`
+      ).all(clientId) as any[];
+  return rows.map(r => ({
+    id: r.id,
+    clientId: r.client_id,
+    leadId: r.lead_id,
+    draftMessage: r.draft_message,
+    status: r.status,
+    approvedAt: r.approved_at,
+    sentAt: r.sent_at,
+    rejectedAt: r.rejected_at,
+    rejectionNote: r.rejection_note,
+    createdAt: r.created_at,
+  }));
+}
+
+export function approveOutreach(queueId: number): void {
+  db.prepare('UPDATE outreach_queue SET status=?, approved_at=? WHERE id=?')
+    .run('approved', Date.now(), queueId);
+}
+
+export function rejectOutreach(queueId: number, note: string): void {
+  db.prepare('UPDATE outreach_queue SET status=?, rejected_at=?, rejection_note=? WHERE id=?')
+    .run('rejected', Date.now(), note, queueId);
+}
+
+export function markOutreachSent(queueId: number): void {
+  db.prepare('UPDATE outreach_queue SET status=?, sent_at=? WHERE id=?')
+    .run('sent', Date.now(), queueId);
+}
+
+export function getPendingOutreach(clientId: string): OutreachQueueRow[] {
+  return listOutreachQueue(clientId, 'pending');
+}
+
+export function getEnrichedLeads(clientId: string): EnrichedLead[] {
+  const rows = db.prepare(
+    `SELECT id, platform, profile_url, display_name, bio, recent_posts
+     FROM leads
+     WHERE client_id=? AND status='enriched'
+     ORDER BY enriched_at DESC, scraped_at DESC`
+  ).all(clientId) as {
+    id: number;
+    platform: string;
+    profile_url: string;
+    display_name: string | null;
+    bio: string | null;
+    recent_posts: string | null;
+  }[];
+  return rows.map(r => {
+    let recentPosts: string[] = [];
+    if (r.recent_posts) {
+      try {
+        const parsed = JSON.parse(r.recent_posts);
+        if (Array.isArray(parsed)) recentPosts = parsed;
+      } catch {
+        recentPosts = [];
+      }
+    }
+    return {
+      id: r.id,
+      platform: r.platform,
+      profileUrl: r.profile_url,
+      displayName: r.display_name,
+      bio: r.bio,
+      recentPosts,
+    };
+  });
+}
+
+// ── getAllClients + updateClient (P5-T1) ─────────────────────────────────────
+
+export function getAllClients(): {
+  id: string;
+  name: string;
+  industry: string;
+  targetPlatform: string;
+}[] {
+  const rows = db.prepare(
+    'SELECT id, name, industry, target_platform FROM clients ORDER BY created_at DESC'
+  ).all() as { id: string; name: string; industry: string; target_platform: string }[];
+  return rows.map(r => ({
+    id: r.id,
+    name: r.name,
+    industry: r.industry,
+    targetPlatform: r.target_platform,
+  }));
+}
+
+export function updateClient(clientId: string, params: {
+  name?: string;
+  industry?: string;
+  targetPlatform?: TargetPlatform;
+  brandVoice?: string;
+}): void {
+  if (params.targetPlatform !== undefined && !TARGET_PLATFORMS.includes(params.targetPlatform)) {
+    throw new SolomonError(`invalid targetPlatform: ${params.targetPlatform}`, 'INVALID_TARGET_PLATFORM');
+  }
+  const sets: string[] = [];
+  const vals: (string | number)[] = [];
+  if (params.name !== undefined)           { sets.push('name=?');            vals.push(params.name); }
+  if (params.industry !== undefined)       { sets.push('industry=?');        vals.push(params.industry); }
+  if (params.targetPlatform !== undefined) { sets.push('target_platform=?'); vals.push(params.targetPlatform); }
+  if (params.brandVoice !== undefined)     { sets.push('brand_voice=?');     vals.push(params.brandVoice); }
+  if (sets.length === 0) return;
+  sets.push('updated_at=?');
+  vals.push(Date.now());
+  vals.push(clientId);
+  db.prepare(`UPDATE clients SET ${sets.join(', ')} WHERE id=?`).run(...vals);
+}
